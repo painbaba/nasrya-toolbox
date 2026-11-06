@@ -14,6 +14,7 @@
 `nasrya` is a fast, beautiful TUI that detects, installs (via [Scoop](https://scoop.sh)) and runs
 the pentest tools that actually work natively on Windows — no WSL, no VM.
 
+[![CI](https://github.com/tahabenissa/nasrya-toolbox/actions/workflows/ci.yml/badge.svg)](https://github.com/tahabenissa/nasrya-toolbox/actions/workflows/ci.yml)
 ![status](https://img.shields.io/badge/status-early%20skeleton-orange)
 ![platform](https://img.shields.io/badge/platform-Windows-0078D6)
 ![built with](https://img.shields.io/badge/built%20with-Rust%20%2B%20ratatui-000000)

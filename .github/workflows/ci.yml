@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build & check (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Advisory only for now — compilation is the hard gate below.
+      - name: Format check (advisory)
+        continue-on-error: true
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (advisory)
+        continue-on-error: true
+        run: cargo clippy --all-targets
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Smoke test (--version / list)
+        run: |
+          ./target/release/nasrya.exe --version
+          ./target/release/nasrya.exe list
