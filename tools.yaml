@@ -1,0 +1,68 @@
+# nasrya — tool registry (walking-skeleton subset)
+# Add a tool by adding an entry here; no code changes needed.
+#
+# Fields:
+#   name        display name
+#   category    recon | web | passwords | sniffing | forensics | ...
+#   description one line shown in the output pane header
+#   exe         the executable used to DETECT installation (PATH probe via where.exe)
+#   scoop       the scoop package name used to install
+#   run_cmd     the command actually launched
+#   args_hint   arguments prefilled when you press Enter (edit before running)
+#   bucket      (optional) scoop bucket the package lives in; main-bucket tools omit this
+#
+# NOTE ON WIRELESS: live Wi-Fi capture / monitor-mode / injection do NOT work on
+# Windows with normal adapters. Tools like aircrack-ng are offline-only here.
+# Real wireless attacks need Linux + a supported USB adapter. Kept out of this
+# subset on purpose so the skeleton stays honest about what actually works.
+
+tools:
+  - name: nmap
+    category: recon
+    description: Network / port & service scanner
+    exe: nmap
+    scoop: nmap
+    run_cmd: nmap
+    args_hint: "-sV -T4 scanme.nmap.org"
+
+  - name: sqlmap
+    category: web
+    description: Automatic SQL injection tool
+    exe: sqlmap
+    scoop: sqlmap
+    run_cmd: sqlmap
+    args_hint: "--version"
+
+  - name: hashcat
+    category: passwords
+    description: GPU password / hash cracker (needs GPU drivers)
+    exe: hashcat
+    scoop: hashcat
+    run_cmd: hashcat
+    args_hint: "--version"
+
+  - name: tshark
+    category: sniffing
+    description: Wireshark CLI — packet capture / analysis (needs Npcap + admin)
+    exe: tshark
+    scoop: wireshark
+    run_cmd: tshark
+    args_hint: "-D"
+
+  - name: nuclei
+    category: web
+    description: Template-based vulnerability scanner
+    exe: nuclei
+    scoop: nuclei
+    run_cmd: nuclei
+    args_hint: "-version"
+    bucket: security
+
+  - name: ffuf
+    category: web
+    description: Fast web fuzzer
+    exe: ffuf
+    scoop: ffuf
+    run_cmd: ffuf
+    args_hint: "-V"
+    bucket: security

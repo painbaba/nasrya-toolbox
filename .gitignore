@@ -1,0 +1,14 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock
+
+# nasrya runtime artifacts
+/engagements/
+*.log
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
