@@ -78,6 +78,13 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_tool_list(f: &mut Frame, app: &App, area: Rect) {
+    // Pad names to the longest one so the category column stays aligned.
+    let name_w = app
+        .tools
+        .iter()
+        .map(|t| t.name.chars().count())
+        .max()
+        .unwrap_or(0);
     let items: Vec<ListItem> = app
         .tools
         .iter()
@@ -91,7 +98,7 @@ fn render_tool_list(f: &mut Frame, app: &App, area: Rect) {
             let name_style = Style::default().fg(FG).add_modifier(Modifier::BOLD);
             let line = Line::from(vec![
                 Span::styled(format!("{icon} "), Style::default().fg(color)),
-                Span::styled(format!("{:<10}", t.name), name_style),
+                Span::styled(format!("{:<name_w$}", t.name), name_style),
                 Span::styled(format!(" {}", t.category), Style::default().fg(DIM)),
             ]);
             ListItem::new(line)

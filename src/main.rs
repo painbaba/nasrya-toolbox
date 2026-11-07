@@ -33,13 +33,18 @@ fn main() -> Result<()> {
         Some("list") => {
             let tools = registry::load(registry::registry_path())?;
             println!("nasrya — {} tools", tools.len());
+            let name_w = tools.iter().map(|t| t.name.chars().count()).max().unwrap_or(0);
+            let cat_w = tools.iter().map(|t| t.category.chars().count()).max().unwrap_or(0);
             for t in &tools {
                 let installed = if detect::is_installed(&t.exe) {
                     "installed"
                 } else {
                     "missing"
                 };
-                println!("  {:<9} [{:<9}] {:<9} {}", t.name, t.category, installed, t.description);
+                println!(
+                    "  {:<name_w$} [{:<cat_w$}] {:<9} {}",
+                    t.name, t.category, installed, t.description
+                );
             }
             Ok(())
         }
