@@ -114,6 +114,11 @@ nasrya --version    show version
 | `c` | cancel the running process |
 | `q` | quit |
 
+**Arguments** are split on spaces. Use `"double"` or `'single'` quotes to keep spaces in
+one argument, e.g. `-H "User-Agent: nasrya"` or `-w "C:\My Lists\big.txt"`. Backslashes are
+literal (no need to double them), and `\"` is a literal quote. A quoted path can't end in a
+backslash: write `"C:\dir"`, not `"C:\dir\"`.
+
 ## Adding a tool
 
 Edit [`tools.yaml`](tools.yaml) — no code changes:

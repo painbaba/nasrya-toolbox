@@ -7,6 +7,7 @@ use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::DefaultTerminal;
 
+use crate::args;
 use crate::banner;
 use crate::detect;
 use crate::registry::Tool;
@@ -215,8 +216,14 @@ impl App {
             return;
         }
 
-        let args: Vec<String> = args_str.split_whitespace().map(|s| s.to_string()).collect();
-        self.push(format!("$ {} {}", cmd, args.join(" ")));
+        let args = match args::split(args_str) {
+            Ok(a) => a,
+            Err(e) => {
+                self.push(format!("[err] can't parse args: {e} — nothing was run."));
+                return;
+            }
+        };
+        self.push(format!("$ {} {}", cmd, args::join(&args)));
 
         match runner::spawn_streaming(&cmd, &args, self.tx.clone()) {
             Ok(pid) => {

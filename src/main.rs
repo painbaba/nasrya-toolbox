@@ -7,6 +7,7 @@
 //!   nasrya --version  show version
 
 mod app;
+mod args;
 mod banner;
 mod detect;
 mod registry;
