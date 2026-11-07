@@ -387,3 +387,13 @@ tools:
     args_hint: ""
     launch: gui
     note: needs a Java 17+ runtime (e.g. scoop bucket add java; scoop install java/temurin17-jre)
+
+  - name: cyberchef
+    category: crypto
+    description: The Cyber Swiss-Army Knife (encode / decode / crypto), offline
+    exe: '{scoop_app}\CyberChef.html'
+    scoop: cyberchef
+    bucket: extras
+    run_cmd: ""
+    launch: web
+    url: '{scoop_app}\CyberChef.html'
