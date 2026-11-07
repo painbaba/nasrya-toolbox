@@ -101,6 +101,11 @@ app.js) is embedded with `include_str!`, so rebuild after editing it.
 
 ## Repo conventions
 
+- **Pull before you change anything.** Several people push straight to `main`, so at the start of
+  every task, before reading code to plan an edit, run `git pull --rebase origin main`, and read
+  `git log --oneline -5` to see what landed. If the working tree has uncommitted changes, don't
+  stash or discard them; ask first. Pull again right before pushing, and if the rebase conflicts,
+  keep both sides' work and rerun `cargo test` before pushing. Never force-push.
 - Commit and push directly to `main` (no PR branches).
 - Commit messages: a short imperative subject, then a wrapped body explaining what changed and why
   (see `git log`).
