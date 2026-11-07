@@ -355,3 +355,13 @@ tools:
     args_hint: ""
     launch: gui
     note: for 32-bit targets run x32dbg (also installed), or x96dbg to pick automatically
+
+  - name: dnspy
+    category: reversing
+    description: .NET decompiler / debugger (dnSpyEx)
+    exe: '{scoop_app}\dnSpy.exe'
+    scoop: dnspyex
+    bucket: extras
+    run_cmd: '{scoop_app}\dnSpy.exe'
+    args_hint: ""
+    launch: gui
