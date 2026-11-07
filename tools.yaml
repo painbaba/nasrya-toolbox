@@ -344,3 +344,14 @@ tools:
     run_cmd: cutter
     args_hint: ""
     launch: gui
+
+  - name: x64dbg
+    category: reversing
+    description: Windows x64 user-mode debugger
+    exe: x64dbg
+    scoop: x64dbg
+    bucket: extras
+    run_cmd: x64dbg
+    args_hint: ""
+    launch: gui
+    note: for 32-bit targets run x32dbg (also installed), or x96dbg to pick automatically
