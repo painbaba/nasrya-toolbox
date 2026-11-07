@@ -33,6 +33,10 @@
 #               from the active challenge (C), written UNQUOTED (values are quoted for you):
 #               {target} IP/host/URL/nc  {file} a challenge file  {out} the challenge's out\
 #               folder  {wordlist} the default wordlist. Missing values are asked for.
+#   options     (optional) flags and subcommands the web view's command helper suggests
+#               and explains: options: [{ flag: -p, arg: '<ports>', help: ports to scan }].
+#               `flag` is one word (a subcommand like `dir` works too); `arg` only for
+#               flags that take a value. Quote values that start with - or <.
 #   sandbox     (optional) never (default) | optional | recommended: `S` runs the tool in
 #               Windows Sandbox (throwaway VM; sample read-only, network off by default).
 #               Scoop gui/stream tools only. Use recommended for tools that execute the
@@ -75,6 +79,27 @@ tools:
       - { name: full, args: '-p- -sV -sC -T4 {target} -oN {out}\nmap-full.txt' }
       - { name: udp, args: '-sU --top-ports 100 {target}' }
       - { name: vuln scripts, args: '--script vuln {target}' }
+    options:
+      - { flag: '-sV', help: 'probe open ports for service and version' }
+      - { flag: '-sC', help: 'run the default NSE scripts' }
+      - { flag: '-A', help: 'aggressive: OS, versions, scripts and traceroute' }
+      - { flag: '-p', arg: '<ports>', help: 'ports to scan: 22,80,443 or 1-1000' }
+      - { flag: '-p-', help: 'all 65535 TCP ports' }
+      - { flag: '--top-ports', arg: '<n>', help: 'the n most common ports' }
+      - { flag: '-T4', help: 'faster timing (T0 slowest ... T5 fastest)' }
+      - { flag: '-Pn', help: 'skip host discovery: treat the host as up' }
+      - { flag: '-sn', help: 'ping sweep only, no port scan' }
+      - { flag: '-sS', help: 'SYN scan (needs admin and Npcap)' }
+      - { flag: '-sT', help: 'TCP connect scan (no admin needed)' }
+      - { flag: '-sU', help: 'UDP scan (slow, needs admin)' }
+      - { flag: '-O', help: 'guess the operating system' }
+      - { flag: '-n', help: 'no DNS resolution' }
+      - { flag: '--open', help: 'only show open ports' }
+      - { flag: '--script', arg: '<name>', help: 'NSE scripts: vuln, http-*, smb-enum-shares ...' }
+      - { flag: '--min-rate', arg: '<n>', help: 'send at least n packets per second' }
+      - { flag: '-oN', arg: '<file>', help: 'save normal output' }
+      - { flag: '-oA', arg: '<basename>', help: 'save every output format' }
+      - { flag: '-v', help: 'verbose' }
 
   - name: sqlmap
     categories: [web, exploit]
@@ -87,6 +112,27 @@ tools:
       - { name: test the url, args: '-u {target} --batch' }
       - { name: list databases, args: '-u {target} --batch --dbs' }
       - { name: crawl forms, args: '-u {target} --batch --forms --crawl=2' }
+    options:
+      - { flag: '-u', arg: '<url>', help: 'target URL with the parameter, e.g. ?id=1' }
+      - { flag: '--batch', help: 'never ask, use the defaults' }
+      - { flag: '--dbs', help: 'list databases' }
+      - { flag: '-D', arg: '<db>', help: 'database to use' }
+      - { flag: '--tables', help: 'list tables' }
+      - { flag: '-T', arg: '<table>', help: 'table to use' }
+      - { flag: '--columns', help: 'list columns' }
+      - { flag: '--dump', help: 'dump the table entries' }
+      - { flag: '-p', arg: '<param>', help: 'parameter(s) to test' }
+      - { flag: '--data', arg: '<body>', help: 'POST body, e.g. user=a&pass=b' }
+      - { flag: '--cookie', arg: '<cookie>', help: 'Cookie header value' }
+      - { flag: '-r', arg: '<file>', help: 'load the HTTP request from a file (Burp/ZAP)' }
+      - { flag: '--forms', help: 'find and test forms on the page' }
+      - { flag: '--crawl', arg: '<depth>', help: 'crawl the site from the URL' }
+      - { flag: '--level', arg: '<1-5>', help: 'how many tests to run (default 1)' }
+      - { flag: '--risk', arg: '<1-3>', help: 'how risky the tests may be (default 1)' }
+      - { flag: '--technique', arg: '<BEUSTQ>', help: 'injection techniques to use' }
+      - { flag: '--random-agent', help: 'random User-Agent' }
+      - { flag: '--threads', arg: '<n>', help: 'concurrent requests' }
+      - { flag: '--os-shell', help: 'try to get an OS shell' }
 
   - name: hashcat
     categories: [passwords, crypto]
@@ -99,6 +145,20 @@ tools:
       - { name: wordlist (auto mode), args: '-a 0 {file} "{app:seclists-lite}\xato-net-10-million-passwords-10000.txt"' }
       - { name: identify the hash type, args: '--identify {file}' }
       - { name: show cracked, args: '--show {file}' }
+    options:
+      - { flag: '-m', arg: '<mode>', help: 'hash type: 0 MD5, 100 SHA1, 1000 NTLM, 1800 sha512crypt ...' }
+      - { flag: '-a', arg: '<mode>', help: 'attack: 0 wordlist, 3 mask, 6/7 hybrid' }
+      - { flag: '-r', arg: '<rules>', help: 'rules file, e.g. best64.rule' }
+      - { flag: '--identify', help: 'guess the hash mode' }
+      - { flag: '--show', help: 'show cracked hashes from the potfile' }
+      - { flag: '-o', arg: '<file>', help: 'write cracked hashes to a file' }
+      - { flag: '-O', help: 'optimized kernels (faster, shorter passwords)' }
+      - { flag: '-w', arg: '<1-4>', help: 'workload profile (3 high, 4 nightmare)' }
+      - { flag: '--increment', help: 'grow mask length step by step' }
+      - { flag: '--username', help: 'ignore user:hash usernames' }
+      - { flag: '--force', help: 'ignore warnings' }
+      - { flag: '--potfile-disable', help: 'don''t read or write the potfile' }
+      - { flag: '-I', help: 'list the compute devices' }
 
   - name: tshark
     categories: [network, forensics]
@@ -107,6 +167,21 @@ tools:
     scoop: wireshark
     run_cmd: tshark
     args_hint: "-D"
+    options:
+      - { flag: '-D', help: 'list capture interfaces' }
+      - { flag: '-i', arg: '<iface>', help: 'capture on this interface (number or name)' }
+      - { flag: '-r', arg: '<file>', help: 'read a pcap / pcapng' }
+      - { flag: '-w', arg: '<file>', help: 'write the capture to a file' }
+      - { flag: '-f', arg: '<filter>', help: 'capture filter (BPF), e.g. "port 80"' }
+      - { flag: '-Y', arg: '<filter>', help: 'display filter, e.g. http.request' }
+      - { flag: '-c', arg: '<n>', help: 'stop after n packets' }
+      - { flag: '-T', arg: '<format>', help: 'output format: fields, json, text ...' }
+      - { flag: '-e', arg: '<field>', help: 'field to print with -T fields, e.g. ip.src' }
+      - { flag: '-V', help: 'full packet details' }
+      - { flag: '-q', help: 'quiet (with -z)' }
+      - { flag: '-z', arg: '<stat>', help: 'statistics: io,phs  conv,tcp  http,tree ...' }
+      - { flag: '--export-objects', arg: '<proto,dir>', help: 'save transferred files: http,out' }
+      - { flag: '-n', help: 'no name resolution' }
 
   - name: nuclei
     categories: [web, recon, exploit]
@@ -119,6 +194,20 @@ tools:
     recipes:
       - { name: scan, args: '-u {target}' }
       - { name: medium and up, args: '-u {target} -severity medium,high,critical' }
+    options:
+      - { flag: '-u', arg: '<url>', help: 'target' }
+      - { flag: '-l', arg: '<file>', help: 'list of targets' }
+      - { flag: '-t', arg: '<templates>', help: 'templates or folders to run' }
+      - { flag: '-tags', arg: '<tags>', help: 'only templates with these tags, e.g. cve,lfi' }
+      - { flag: '-severity', arg: '<levels>', help: 'info,low,medium,high,critical' }
+      - { flag: '-as', help: 'automatic scan: pick templates from detected tech' }
+      - { flag: '-rl', arg: '<n>', help: 'max requests per second' }
+      - { flag: '-c', arg: '<n>', help: 'templates run in parallel' }
+      - { flag: '-o', arg: '<file>', help: 'write findings to a file' }
+      - { flag: '-jsonl', help: 'JSON lines output' }
+      - { flag: '-silent', help: 'only show findings' }
+      - { flag: '-nc', help: 'no colors' }
+      - { flag: '-ut', help: 'update the templates' }
 
   - name: ffuf
     categories: [web, recon]
@@ -132,6 +221,24 @@ tools:
       - { name: dirs, args: '-u {target}/FUZZ -w {wordlist}' }
       - { name: dirs + extensions, args: '-u {target}/FUZZ -w {wordlist} -e .php,.txt,.bak' }
       - { name: recursive, args: '-u {target}/FUZZ -w {wordlist} -recursion -recursion-depth 2' }
+    options:
+      - { flag: '-u', arg: '<url>', help: 'URL with FUZZ where the words go' }
+      - { flag: '-w', arg: '<wordlist>', help: 'wordlist (path[:KEYWORD])' }
+      - { flag: '-e', arg: '<.php,.txt>', help: 'extensions to append' }
+      - { flag: '-mc', arg: '<codes>', help: 'match status codes (default 200-299,301,302,307,401,403,405,500)' }
+      - { flag: '-fc', arg: '<codes>', help: 'filter out status codes' }
+      - { flag: '-fs', arg: '<size>', help: 'filter out response sizes' }
+      - { flag: '-fw', arg: '<n>', help: 'filter out word counts' }
+      - { flag: '-ac', help: 'auto-calibrate the filters' }
+      - { flag: '-recursion', help: 'fuzz found folders too' }
+      - { flag: '-recursion-depth', arg: '<n>', help: 'how deep to recurse' }
+      - { flag: '-t', arg: '<n>', help: 'threads (default 40)' }
+      - { flag: '-rate', arg: '<n>', help: 'requests per second' }
+      - { flag: '-H', arg: '<"Name: value">', help: 'add a header' }
+      - { flag: '-X', arg: '<method>', help: 'HTTP method' }
+      - { flag: '-d', arg: '<data>', help: 'POST data' }
+      - { flag: '-o', arg: '<file>', help: 'write results to a file' }
+      - { flag: '-c', help: 'colorize output' }
 
   - name: gobuster
     categories: [recon, web]
@@ -143,6 +250,23 @@ tools:
     recipes:
       - { name: dirs, args: 'dir -u {target} -w {wordlist}' }
       - { name: dirs + extensions, args: 'dir -u {target} -w {wordlist} -x php,txt,bak' }
+    options:
+      - { flag: 'dir', help: 'mode: directories and files' }
+      - { flag: 'dns', help: 'mode: subdomains' }
+      - { flag: 'vhost', help: 'mode: virtual hosts' }
+      - { flag: 'fuzz', help: 'mode: replace FUZZ in the URL' }
+      - { flag: '-u', arg: '<url>', help: 'target URL' }
+      - { flag: '-w', arg: '<wordlist>', help: 'wordlist' }
+      - { flag: '-x', arg: '<php,txt>', help: 'extensions to try (dir)' }
+      - { flag: '-d', arg: '<domain>', help: 'domain (dns)' }
+      - { flag: '-t', arg: '<n>', help: 'threads (default 10)' }
+      - { flag: '-s', arg: '<codes>', help: 'status codes to show (dir)' }
+      - { flag: '-b', arg: '<codes>', help: 'status codes to hide (dir)' }
+      - { flag: '-k', help: 'skip TLS certificate checks' }
+      - { flag: '-r', help: 'follow redirects' }
+      - { flag: '--append-domain', help: 'append the domain to each word (vhost)' }
+      - { flag: '-o', arg: '<file>', help: 'write results to a file' }
+      - { flag: '-q', help: 'quiet: no banner' }
 
   - name: feroxbuster
     categories: [web, recon]
@@ -154,6 +278,21 @@ tools:
     recipes:
       - { name: dirs, args: '-u {target} -w {wordlist}' }
       - { name: depth 2 + extensions, args: '-u {target} -w {wordlist} -x php,txt -d 2' }
+    options:
+      - { flag: '-u', arg: '<url>', help: 'target URL' }
+      - { flag: '-w', arg: '<wordlist>', help: 'wordlist' }
+      - { flag: '-x', arg: '<php,txt>', help: 'extensions to try' }
+      - { flag: '-d', arg: '<depth>', help: 'recursion depth (default 4)' }
+      - { flag: '-n', help: 'no recursion' }
+      - { flag: '-t', arg: '<n>', help: 'threads (default 50)' }
+      - { flag: '-s', arg: '<codes>', help: 'status codes to show' }
+      - { flag: '-C', arg: '<codes>', help: 'status codes to hide' }
+      - { flag: '-S', arg: '<size>', help: 'hide responses of this size' }
+      - { flag: '-e', help: 'extract links from responses' }
+      - { flag: '-k', help: 'skip TLS certificate checks' }
+      - { flag: '-H', arg: '<"Name: value">', help: 'add a header' }
+      - { flag: '-o', arg: '<file>', help: 'write results to a file' }
+      - { flag: '-q', help: 'quiet: only results' }
 
   - name: httpx
     categories: [recon, web]
@@ -165,6 +304,20 @@ tools:
     bucket: security
     # Python's httpx package ships an 'httpx' CLI too; make sure we found PD's
     verify: { args: "-version", contains: "projectdiscovery" }
+    options:
+      - { flag: '-u', arg: '<target>', help: 'host or URL to probe' }
+      - { flag: '-l', arg: '<file>', help: 'list of hosts' }
+      - { flag: '-sc', help: 'show the status code' }
+      - { flag: '-title', help: 'show the page title' }
+      - { flag: '-td', help: 'detect technologies' }
+      - { flag: '-cl', help: 'show the content length' }
+      - { flag: '-ip', help: 'show the IP' }
+      - { flag: '-fr', help: 'follow redirects' }
+      - { flag: '-p', arg: '<ports>', help: 'ports to probe' }
+      - { flag: '-mc', arg: '<codes>', help: 'only show these status codes' }
+      - { flag: '-o', arg: '<file>', help: 'write results to a file' }
+      - { flag: '-j', help: 'JSON lines output' }
+      - { flag: '-silent', help: 'only results' }
 
   - name: subfinder
     categories: [recon, osint]
@@ -174,6 +327,15 @@ tools:
     run_cmd: subfinder
     args_hint: "-d example.com"
     bucket: security
+    options:
+      - { flag: '-d', arg: '<domain>', help: 'domain to enumerate' }
+      - { flag: '-dL', arg: '<file>', help: 'list of domains' }
+      - { flag: '-all', help: 'use every source (slower)' }
+      - { flag: '-recursive', help: 'only sources that can recurse' }
+      - { flag: '-t', arg: '<n>', help: 'threads' }
+      - { flag: '-o', arg: '<file>', help: 'write results to a file' }
+      - { flag: '-oJ', help: 'JSON lines output' }
+      - { flag: '-silent', help: 'only subdomains' }
 
   - name: amass
     categories: [recon, osint]
@@ -182,6 +344,15 @@ tools:
     scoop: amass
     run_cmd: amass
     args_hint: "enum -passive -d example.com"
+    options:
+      - { flag: 'enum', help: 'subcommand: find subdomains' }
+      - { flag: 'intel', help: 'subcommand: find root domains and ASNs' }
+      - { flag: '-d', arg: '<domain>', help: 'domain' }
+      - { flag: '-passive', help: 'passive sources only (no DNS brute force)' }
+      - { flag: '-active', help: 'active: zone transfers, cert grabs' }
+      - { flag: '-brute', help: 'DNS brute force' }
+      - { flag: '-w', arg: '<wordlist>', help: 'wordlist for -brute' }
+      - { flag: '-o', arg: '<file>', help: 'write results to a file' }
 
   - name: katana
     categories: [web, recon]
@@ -193,6 +364,19 @@ tools:
     bucket: security
     recipes:
       - { name: crawl, args: '-u {target} -d 3' }
+    options:
+      - { flag: '-u', arg: '<url>', help: 'start URL' }
+      - { flag: '-list', arg: '<file>', help: 'list of URLs' }
+      - { flag: '-d', arg: '<depth>', help: 'crawl depth (default 3)' }
+      - { flag: '-jc', help: 'parse JavaScript for endpoints' }
+      - { flag: '-kf', arg: '<all>', help: 'known files: robots.txt, sitemap.xml' }
+      - { flag: '-headless', help: 'crawl with a headless browser' }
+      - { flag: '-ef', arg: '<exts>', help: 'skip these extensions, e.g. png,css' }
+      - { flag: '-f', arg: '<field>', help: 'print only a field: url, path, qurl ...' }
+      - { flag: '-c', arg: '<n>', help: 'concurrent fetchers' }
+      - { flag: '-o', arg: '<file>', help: 'write results to a file' }
+      - { flag: '-jsonl', help: 'JSON lines output' }
+      - { flag: '-silent', help: 'only results' }
 
   - name: rustscan
     categories: [network, recon]
@@ -204,6 +388,15 @@ tools:
     recipes:
       - { name: quick, args: '-a {target} -- -sV' }
       - { name: all ports, args: '-a {target} -r 1-65535 -- -sV -sC' }
+    options:
+      - { flag: '-a', arg: '<hosts>', help: 'addresses, CIDRs or hostnames' }
+      - { flag: '-p', arg: '<ports>', help: 'ports: 22,80,443' }
+      - { flag: '-r', arg: '<range>', help: 'port range: 1-65535' }
+      - { flag: '--top', help: 'the top 1000 ports' }
+      - { flag: '-b', arg: '<n>', help: 'batch size (ports at once)' }
+      - { flag: '-t', arg: '<ms>', help: 'timeout per port' }
+      - { flag: '-g', help: 'greppable: only host -> ports, no nmap' }
+      - { flag: '--', help: 'everything after this goes to nmap, e.g. -- -sV -sC' }
 
   - name: openssl
     categories: [crypto, network]
@@ -212,6 +405,27 @@ tools:
     scoop: openssl
     run_cmd: openssl
     args_hint: "version -a"
+    options:
+      - { flag: 'version', help: 'subcommand: show the version (-a for details)' }
+      - { flag: 's_client', help: 'subcommand: connect to a TLS server' }
+      - { flag: 'x509', help: 'subcommand: read certificates' }
+      - { flag: 'req', help: 'subcommand: certificate requests' }
+      - { flag: 'genrsa', help: 'subcommand: make an RSA key' }
+      - { flag: 'rsa', help: 'subcommand: read or convert RSA keys' }
+      - { flag: 'pkey', help: 'subcommand: read any private / public key' }
+      - { flag: 'enc', help: 'subcommand: symmetric encrypt / decrypt' }
+      - { flag: 'dgst', help: 'subcommand: hash or sign a file' }
+      - { flag: 'base64', help: 'subcommand: base64 encode (-d decode)' }
+      - { flag: 'asn1parse', help: 'subcommand: dump ASN.1 structure' }
+      - { flag: '-connect', arg: '<host:port>', help: 's_client: where to connect' }
+      - { flag: '-servername', arg: '<name>', help: 's_client: SNI host name' }
+      - { flag: '-showcerts', help: 's_client: print the whole chain' }
+      - { flag: '-in', arg: '<file>', help: 'input file' }
+      - { flag: '-out', arg: '<file>', help: 'output file' }
+      - { flag: '-text', help: 'print in human-readable form' }
+      - { flag: '-noout', help: 'don''t print the encoded form' }
+      - { flag: '-pubin', help: 'the input is a public key' }
+      - { flag: '-d', help: 'decrypt / decode' }
 
   - name: exiftool
     categories: [forensics, osint, stego]
@@ -223,6 +437,22 @@ tools:
     recipes:
       - { name: metadata, args: '{file}' }
       - { name: everything, grouped, args: '-a -u -g1 {file}' }
+    options:
+      - { flag: '-a', help: 'allow duplicate tags' }
+      - { flag: '-u', help: 'show unknown tags too' }
+      - { flag: '-g1', help: 'group by location (EXIF, XMP, ...)' }
+      - { flag: '-G', help: 'show the group of each tag' }
+      - { flag: '-s', help: 'short tag names' }
+      - { flag: '-n', help: 'raw numbers instead of converted values' }
+      - { flag: '-ee', help: 'extract embedded data (video frames ...)' }
+      - { flag: '-b', help: 'binary output, e.g. -b -ThumbnailImage' }
+      - { flag: '-j', help: 'JSON output' }
+      - { flag: '-csv', help: 'CSV output' }
+      - { flag: '-r', help: 'recurse into folders' }
+      - { flag: '-ext', arg: '<ext>', help: 'only files with this extension' }
+      - { flag: '-all=', help: 'REMOVE all metadata (writes the file)' }
+      - { flag: '-overwrite_original', help: 'don''t keep the _original backup' }
+      - { flag: '-v', help: 'verbose, shows structure' }
 
   - name: strings
     categories: [forensics, reversing]
@@ -235,6 +465,14 @@ tools:
     recipes:
       - { name: printable (6+), args: '-n 6 {file}' }
       - { name: long only (10+), args: '-n 10 {file}' }
+    options:
+      - { flag: '-accepteula', help: 'accept the Sysinternals EULA silently' }
+      - { flag: '-n', arg: '<len>', help: 'minimum string length (default 3)' }
+      - { flag: '-a', help: 'ASCII only' }
+      - { flag: '-u', help: 'Unicode only' }
+      - { flag: '-o', help: 'print the offset of each string' }
+      - { flag: '-s', help: 'recurse into folders' }
+      - { flag: '-nobanner', help: 'no startup banner' }
 
   - name: radare2
     categories: [reversing, pwn]
@@ -248,6 +486,17 @@ tools:
       - { name: analyze, args: '-A {file}' }
       - { name: all strings, args: '-qc izz {file}' }
       - { name: debug (runs the binary), args: '-d {file}' }
+    options:
+      - { flag: '-A', help: 'analyze everything (aaa) on open' }
+      - { flag: '-q', help: 'quit after the -c commands' }
+      - { flag: '-c', arg: '<cmds>', help: 'commands to run: ''izz'', ''afl'', ''pdf @ main''' }
+      - { flag: '-d', help: 'debug: RUNS the binary' }
+      - { flag: '-w', help: 'open for writing (patching)' }
+      - { flag: '-n', help: 'bare: no analysis, no headers' }
+      - { flag: '-b', arg: '<bits>', help: '16, 32 or 64' }
+      - { flag: '-i', arg: '<script>', help: 'run an r2 script file' }
+      - { flag: '-e', arg: '<k=v>', help: 'set a config variable' }
+      - { flag: '-v', help: 'version' }
 
   - name: upx
     categories: [reversing]
@@ -260,6 +509,16 @@ tools:
       - { name: unpack, args: '-d -o {out}\unpacked.exe {file}' }
       - { name: test, args: '-t {file}' }
       - { name: list, args: '-l {file}' }
+    options:
+      - { flag: '-d', help: 'decompress (unpack)' }
+      - { flag: '-t', help: 'test the packed file' }
+      - { flag: '-l', help: 'list packed file info' }
+      - { flag: '-o', arg: '<file>', help: 'write to this file' }
+      - { flag: '-k', help: 'keep a backup' }
+      - { flag: '-f', help: 'force' }
+      - { flag: '-9', help: 'compress better' }
+      - { flag: '--best', help: 'compress best (slow)' }
+      - { flag: '-V', help: 'version' }
 
   - name: jadx
     categories: [mobile, reversing]
@@ -269,6 +528,16 @@ tools:
     run_cmd: jadx
     args_hint: "--version"
     bucket: extras
+    options:
+      - { flag: '-d', arg: '<dir>', help: 'output folder' }
+      - { flag: '-s', help: 'skip sources' }
+      - { flag: '-r', help: 'skip resources' }
+      - { flag: '--deobf', help: 'rename obfuscated names' }
+      - { flag: '-e', help: 'export as a Gradle project' }
+      - { flag: '--show-bad-code', help: 'show code that failed to decompile' }
+      - { flag: '-j', arg: '<n>', help: 'threads' }
+      - { flag: '-q', help: 'quiet' }
+      - { flag: '--version', help: 'version' }
 
   - name: apktool
     categories: [mobile, reversing]
@@ -277,6 +546,15 @@ tools:
     scoop: apktool
     run_cmd: apktool
     args_hint: "--version"
+    options:
+      - { flag: 'd', help: 'subcommand: decode an APK' }
+      - { flag: 'b', help: 'subcommand: build a folder back into an APK' }
+      - { flag: 'if', help: 'subcommand: install a framework' }
+      - { flag: '-o', arg: '<path>', help: 'output folder or file' }
+      - { flag: '-f', help: 'overwrite the output' }
+      - { flag: '-r', help: 'don''t decode resources' }
+      - { flag: '-s', help: 'don''t decode sources (keep classes.dex)' }
+      - { flag: '--version', help: 'version' }
 
   - name: arjun
     categories: [web, recon]
@@ -286,6 +564,17 @@ tools:
     pipx: arjun
     run_cmd: arjun
     args_hint: "-u https://example.com/endpoint"
+    options:
+      - { flag: '-u', arg: '<url>', help: 'target URL' }
+      - { flag: '-i', arg: '<file>', help: 'import targets from a file' }
+      - { flag: '-m', arg: '<method>', help: 'GET, POST, JSON or XML' }
+      - { flag: '-w', arg: '<wordlist>', help: 'parameter wordlist' }
+      - { flag: '-t', arg: '<n>', help: 'threads' }
+      - { flag: '-d', arg: '<s>', help: 'delay between requests' }
+      - { flag: '-c', arg: '<n>', help: 'parameters per request' }
+      - { flag: '--stable', help: 'go slow, for unstable targets' }
+      - { flag: '--passive', help: 'collect parameters from archives too' }
+      - { flag: '-oJ', arg: '<file>', help: 'JSON output' }
 
   - name: dirsearch
     categories: [web, recon]
@@ -296,6 +585,21 @@ tools:
     run_cmd: dirsearch
     args_hint: '-u https://example.com -w "{app:seclists-lite}\common.txt"'
     note: needs Python 3.11+
+    options:
+      - { flag: '-u', arg: '<url>', help: 'target URL' }
+      - { flag: '-l', arg: '<file>', help: 'list of URLs' }
+      - { flag: '-w', arg: '<wordlist>', help: 'wordlist' }
+      - { flag: '-e', arg: '<exts>', help: 'extensions: php,txt,bak' }
+      - { flag: '-t', arg: '<n>', help: 'threads' }
+      - { flag: '-r', help: 'recursive' }
+      - { flag: '-R', arg: '<depth>', help: 'maximum recursion depth' }
+      - { flag: '-i', arg: '<codes>', help: 'only these status codes' }
+      - { flag: '-x', arg: '<codes>', help: 'hide these status codes' }
+      - { flag: '-H', arg: '<"Name: value">', help: 'add a header' }
+      - { flag: '--random-agent', help: 'random User-Agent' }
+      - { flag: '-o', arg: '<file>', help: 'write results to a file' }
+      - { flag: '--format', arg: '<fmt>', help: 'plain, json, csv, md ...' }
+      - { flag: '-q', help: 'quiet' }
 
   - name: wfuzz
     categories: [web, passwords]
@@ -306,6 +610,20 @@ tools:
     run_cmd: wfuzz
     args_hint: '-c -z "file,{app:seclists-lite}\common.txt" --hc 404 https://example.com/FUZZ'
     note: wfuzz depends on pycurl and was last released in 2020; if the install fails on a new Python, ffuf or feroxbuster cover the same ground
+    options:
+      - { flag: '-c', help: 'colors' }
+      - { flag: '-z', arg: '<payload>', help: 'payload, e.g. file,words.txt or range,1-100' }
+      - { flag: '-w', arg: '<wordlist>', help: 'wordlist (same as -z file,...)' }
+      - { flag: '--hc', arg: '<codes>', help: 'hide status codes' }
+      - { flag: '--sc', arg: '<codes>', help: 'show only status codes' }
+      - { flag: '--hl', arg: '<n>', help: 'hide responses with n lines' }
+      - { flag: '--hw', arg: '<n>', help: 'hide responses with n words' }
+      - { flag: '--hh', arg: '<n>', help: 'hide responses with n chars' }
+      - { flag: '-d', arg: '<data>', help: 'POST data' }
+      - { flag: '-H', arg: '<"Name: value">', help: 'add a header' }
+      - { flag: '-b', arg: '<cookie>', help: 'cookie' }
+      - { flag: '-X', arg: '<method>', help: 'HTTP method' }
+      - { flag: '-t', arg: '<n>', help: 'concurrent connections' }
 
   - name: commix
     categories: [web, exploit]
@@ -315,6 +633,16 @@ tools:
     pipx: git+https://github.com/commixproject/commix
     run_cmd: commix
     args_hint: "--url=https://example.com/?addr=127.0.0.1 --batch"
+    options:
+      - { flag: '--url', arg: '<url>', help: 'target URL' }
+      - { flag: '--data', arg: '<body>', help: 'POST body' }
+      - { flag: '--cookie', arg: '<cookie>', help: 'Cookie header value' }
+      - { flag: '-p', arg: '<param>', help: 'parameter to test' }
+      - { flag: '--batch', help: 'never ask, use the defaults' }
+      - { flag: '--level', arg: '<1-3>', help: 'how many tests to run' }
+      - { flag: '--technique', arg: '<c,e,t,f>', help: 'classic, eval, time-based, file-based' }
+      - { flag: '--os-cmd', arg: '<cmd>', help: 'run one command' }
+      - { flag: '--random-agent', help: 'random User-Agent' }
 
   - name: hashid
     categories: [passwords, crypto]
@@ -324,6 +652,11 @@ tools:
     pipx: hashid
     run_cmd: hashid
     args_hint: "-m 5f4dcc3b5aa765d61d8327deb882cf99"
+    options:
+      - { flag: '-m', help: 'show the hashcat mode' }
+      - { flag: '-j', help: 'show the John format' }
+      - { flag: '-e', help: 'list every possible type (salted too)' }
+      - { flag: '-o', arg: '<file>', help: 'write results to a file' }
 
   - name: netexec
     categories: [network, passwords, exploit]
@@ -334,6 +667,29 @@ tools:
     run_cmd: nxc
     args_hint: "smb 192.168.1.0/24"
     note: needs Python 3.11+; SMB/LDAP/WinRM work on Windows, some other protocols are degraded
+    options:
+      - { flag: 'smb', help: 'protocol: SMB' }
+      - { flag: 'ldap', help: 'protocol: LDAP' }
+      - { flag: 'winrm', help: 'protocol: WinRM' }
+      - { flag: 'mssql', help: 'protocol: MSSQL' }
+      - { flag: 'ssh', help: 'protocol: SSH' }
+      - { flag: 'rdp', help: 'protocol: RDP' }
+      - { flag: 'ftp', help: 'protocol: FTP' }
+      - { flag: 'wmi', help: 'protocol: WMI' }
+      - { flag: '-u', arg: '<user|file>', help: 'user name or a file of them' }
+      - { flag: '-p', arg: '<pass|file>', help: 'password or a file of them' }
+      - { flag: '-H', arg: '<hash>', help: 'NTLM hash (pass the hash)' }
+      - { flag: '-d', arg: '<domain>', help: 'domain' }
+      - { flag: '--local-auth', help: 'local account, not domain' }
+      - { flag: '-k', help: 'Kerberos authentication' }
+      - { flag: '--continue-on-success', help: 'keep spraying after a hit' }
+      - { flag: '--shares', help: 'list shares and access (smb)' }
+      - { flag: '--users', help: 'list domain users' }
+      - { flag: '--groups', help: 'list domain groups' }
+      - { flag: '--pass-pol', help: 'password policy (smb)' }
+      - { flag: '--rid-brute', help: 'enumerate users by RID (smb)' }
+      - { flag: '-x', arg: '<cmd>', help: 'run a cmd.exe command' }
+      - { flag: '-X', arg: '<cmd>', help: 'run a PowerShell command' }
 
   - name: rsactftool
     categories: [crypto]
@@ -344,6 +700,18 @@ tools:
     run_cmd: RsaCtfTool
     args_hint: "--publickey key.pub --private"
     note: gmpy2 may need a C toolchain to build on Windows if no wheel matches your Python
+    options:
+      - { flag: '--publickey', arg: '<file>', help: 'public key file(s), wildcards work' }
+      - { flag: '--private', help: 'print the private key if recovered' }
+      - { flag: '--decryptfile', arg: '<file>', help: 'decrypt this ciphertext file' }
+      - { flag: '--decrypt', arg: '<int>', help: 'decrypt this ciphertext number' }
+      - { flag: '-n', arg: '<n>', help: 'modulus' }
+      - { flag: '-e', arg: '<e>', help: 'public exponent' }
+      - { flag: '--attack', arg: '<name>', help: 'attacks to try: all, fermat, wiener ...' }
+      - { flag: '--timeout', arg: '<s>', help: 'timeout per attack' }
+      - { flag: '--createpub', help: 'make a public key from -n and -e' }
+      - { flag: '--dumpkey', help: 'print the key parameters' }
+      - { flag: '--key', arg: '<file>', help: 'key to dump with --dumpkey' }
 
   - name: volatility3
     categories: [forensics]
@@ -358,6 +726,25 @@ tools:
       - { name: processes, args: '-f {file} windows.pslist' }
       - { name: command lines, args: '-f {file} windows.cmdline' }
       - { name: files, args: '-f {file} windows.filescan' }
+    options:
+      - { flag: '-f', arg: '<dump>', help: 'memory image' }
+      - { flag: 'windows.info', help: 'plugin: OS version and build' }
+      - { flag: 'windows.pslist', help: 'plugin: processes' }
+      - { flag: 'windows.pstree', help: 'plugin: process tree' }
+      - { flag: 'windows.cmdline', help: 'plugin: command lines' }
+      - { flag: 'windows.netscan', help: 'plugin: network connections' }
+      - { flag: 'windows.filescan', help: 'plugin: file objects in memory' }
+      - { flag: 'windows.dumpfiles', help: 'plugin: extract files (--virtaddr / --pid)' }
+      - { flag: 'windows.hashdump', help: 'plugin: local password hashes' }
+      - { flag: 'windows.malfind', help: 'plugin: injected code' }
+      - { flag: 'windows.envars', help: 'plugin: environment variables' }
+      - { flag: 'windows.registry.hivelist', help: 'plugin: registry hives' }
+      - { flag: 'linux.pslist', help: 'plugin: Linux processes' }
+      - { flag: 'linux.bash', help: 'plugin: Linux bash history' }
+      - { flag: '--pid', arg: '<pid>', help: 'only this process (plugin option)' }
+      - { flag: '-o', arg: '<dir>', help: 'folder for dumped files' }
+      - { flag: '-r', arg: '<renderer>', help: 'output: pretty, json, csv ...' }
+      - { flag: '-q', help: 'quiet: no progress' }
 
   - name: ropper
     categories: [pwn, reversing]
@@ -367,6 +754,16 @@ tools:
     pipx: ropper
     run_cmd: ropper
     args_hint: "--file binary.exe --search \"pop rdi\""
+    options:
+      - { flag: '--file', arg: '<bin>', help: 'binary to search' }
+      - { flag: '--search', arg: '<gadget>', help: 'gadget pattern, e.g. ''pop rdi''' }
+      - { flag: '--chain', arg: '<type>', help: 'build a chain: execve, mprotect' }
+      - { flag: '--type', arg: '<type>', help: 'rop, jop, sys or all' }
+      - { flag: '--string', arg: '<text>', help: 'find a string' }
+      - { flag: '--asm', arg: '<code>', help: 'assemble instructions' }
+      - { flag: '--badbytes', arg: '<hex>', help: 'avoid these bytes' }
+      - { flag: '--info', help: 'file header info' }
+      - { flag: '--nocolor', help: 'no colors' }
 
   - name: pwntools
     categories: [pwn, exploit]
@@ -377,6 +774,18 @@ tools:
     run_cmd: pwn
     args_hint: "checksec binary.elf"
     note: Windows support is limited - remote tubes, packing, asm and checksec work; local process/gdb features need Linux or WSL
+    options:
+      - { flag: 'checksec', help: 'subcommand: binary protections (NX, PIE, canary ...)' }
+      - { flag: 'cyclic', help: 'subcommand: De Bruijn pattern (cyclic 200)' }
+      - { flag: '-l', arg: '<value>', help: 'with cyclic: offset of a value in the pattern' }
+      - { flag: 'asm', help: 'subcommand: assemble' }
+      - { flag: 'disasm', help: 'subcommand: disassemble hex' }
+      - { flag: 'shellcraft', help: 'subcommand: ready-made shellcode' }
+      - { flag: 'template', help: 'subcommand: exploit script skeleton' }
+      - { flag: 'hex', help: 'subcommand: text to hex' }
+      - { flag: 'unhex', help: 'subcommand: hex to text' }
+      - { flag: 'phd', help: 'subcommand: pretty hex dump' }
+      - { flag: 'constgrep', help: 'subcommand: look up constants' }
 
   - name: theharvester
     categories: [osint, recon]
@@ -387,6 +796,13 @@ tools:
     run_cmd: theHarvester
     args_hint: "-d example.com -b duckduckgo"
     note: needs Python 3.14+ (pipx uses the Python it runs on)
+    options:
+      - { flag: '-d', arg: '<domain>', help: 'domain to search' }
+      - { flag: '-b', arg: '<sources>', help: 'sources: duckduckgo,crtsh,... or all' }
+      - { flag: '-l', arg: '<n>', help: 'limit results per source' }
+      - { flag: '-n', help: 'DNS lookup of the results' }
+      - { flag: '-c', help: 'DNS brute force' }
+      - { flag: '-f', arg: '<file>', help: 'save results (XML and JSON)' }
 
   - name: sherlock
     categories: [osint]
@@ -396,6 +812,15 @@ tools:
     pipx: sherlock-project
     run_cmd: sherlock
     args_hint: "username"
+    options:
+      - { flag: '--print-all', help: 'also show sites without the account' }
+      - { flag: '--site', arg: '<name>', help: 'only check this site (repeatable)' }
+      - { flag: '--timeout', arg: '<s>', help: 'timeout per site' }
+      - { flag: '--output', arg: '<file>', help: 'write results to a file' }
+      - { flag: '--folderoutput', arg: '<dir>', help: 'one file per username here' }
+      - { flag: '--csv', help: 'also write a CSV' }
+      - { flag: '--xlsx', help: 'also write an Excel file' }
+      - { flag: '--nsfw', help: 'include NSFW sites' }
 
   - name: sleuthkit
     categories: [forensics]
@@ -404,6 +829,15 @@ tools:
     scoop: sleuthkit
     run_cmd: fls
     args_hint: "-r -o 2048 image.dd"
+    options:
+      - { flag: '-r', help: 'recurse into folders' }
+      - { flag: '-o', arg: '<sectors>', help: 'partition offset in sectors (see mmls)' }
+      - { flag: '-d', help: 'deleted entries only' }
+      - { flag: '-u', help: 'undeleted entries only' }
+      - { flag: '-p', help: 'full paths' }
+      - { flag: '-l', help: 'long listing: times and sizes' }
+      - { flag: '-m', arg: '<mount>', help: 'timeline (mactime) format' }
+      - { flag: '-f', arg: '<fstype>', help: 'file system type: ntfs, ext4 ...' }
 
   - name: detect-it-easy
     categories: [reversing, forensics, mobile]
@@ -415,6 +849,12 @@ tools:
     args_hint: "binary.exe"
     note: this runs the console version (diec); the GUI is 'die', also on PATH
     sandbox: optional
+    options:
+      - { flag: '-d', help: 'deep scan' }
+      - { flag: '-u', help: 'heuristic scan' }
+      - { flag: '-r', help: 'recurse into folders' }
+      - { flag: '-e', help: 'entropy' }
+      - { flag: '-j', help: 'JSON output' }
 
   - name: cutter
     categories: [reversing]
@@ -492,6 +932,18 @@ tools:
     bucket: winsploit
     run_cmd: gau
     args_hint: "--subs example.com"
+    options:
+      - { flag: '--subs', help: 'include subdomains' }
+      - { flag: '--providers', arg: '<list>', help: 'wayback,commoncrawl,otx,urlscan' }
+      - { flag: '--blacklist', arg: '<exts>', help: 'skip extensions, e.g. png,jpg,css' }
+      - { flag: '--from', arg: '<YYYYMM>', help: 'from this month' }
+      - { flag: '--to', arg: '<YYYYMM>', help: 'up to this month' }
+      - { flag: '--mc', arg: '<codes>', help: 'only these status codes' }
+      - { flag: '--fc', arg: '<codes>', help: 'hide these status codes' }
+      - { flag: '--fp', help: 'one URL per endpoint (drop parameter variants)' }
+      - { flag: '--threads', arg: '<n>', help: 'workers' }
+      - { flag: '--json', help: 'JSON output' }
+      - { flag: '--o', arg: '<file>', help: 'write results to a file' }
 
   - name: john
     categories: [passwords, crypto]
@@ -506,6 +958,18 @@ tools:
       - { name: wordlist, args: '--wordlist="{app:seclists-lite}\xato-net-10-million-passwords-10000.txt" {file}' }
       - { name: single crack, args: '--single {file}' }
       - { name: show cracked, args: '--show {file}' }
+    options:
+      - { flag: '--wordlist=', arg: '<file>', help: 'wordlist mode' }
+      - { flag: '--rules', help: 'mangle the wordlist words (--rules=<set>)' }
+      - { flag: '--format=', arg: '<name>', help: 'hash format: raw-md5, nt, bcrypt ...' }
+      - { flag: '--single', help: 'single crack mode (from user names)' }
+      - { flag: '--incremental', help: 'brute force' }
+      - { flag: '--show', help: 'show cracked passwords' }
+      - { flag: '--list=formats', help: 'list the supported formats' }
+      - { flag: '--fork=', arg: '<n>', help: 'processes' }
+      - { flag: '--session=', arg: '<name>', help: 'name this session' }
+      - { flag: '--restore', help: 'continue the last session' }
+      - { flag: '--pot=', arg: '<file>', help: 'use this pot file' }
 
   - name: steghide
     categories: [stego, forensics]
@@ -519,6 +983,16 @@ tools:
     recipes:
       - { name: info, args: 'info {file}' }
       - { name: extract, empty passphrase, args: 'extract -sf {file} -p "" -xf {out}\steghide.out' }
+    options:
+      - { flag: 'info', help: 'subcommand: what is embedded' }
+      - { flag: 'extract', help: 'subcommand: extract hidden data' }
+      - { flag: 'embed', help: 'subcommand: hide a file' }
+      - { flag: '-sf', arg: '<file>', help: 'stego file (extract)' }
+      - { flag: '-cf', arg: '<file>', help: 'cover file (embed)' }
+      - { flag: '-ef', arg: '<file>', help: 'file to embed' }
+      - { flag: '-xf', arg: '<file>', help: 'write extracted data here' }
+      - { flag: '-p', arg: '<pass>', help: 'passphrase ("" for none)' }
+      - { flag: '-f', help: 'overwrite existing files' }
 
   - name: nikto
     categories: [web, network]
@@ -530,6 +1004,17 @@ tools:
     args_hint: "-h https://example.com"
     recipes:
       - { name: scan, args: '-h {target}' }
+    options:
+      - { flag: '-h', arg: '<host>', help: 'host or URL' }
+      - { flag: '-p', arg: '<port>', help: 'port(s)' }
+      - { flag: '-ssl', help: 'force TLS' }
+      - { flag: '-nossl', help: 'never use TLS' }
+      - { flag: '-Tuning', arg: '<x>', help: 'test types: 1-9, a-c, x (exclude)' }
+      - { flag: '-maxtime', arg: '<s>', help: 'stop after this many seconds' }
+      - { flag: '-id', arg: '<user:pass>', help: 'HTTP basic auth' }
+      - { flag: '-o', arg: '<file>', help: 'write the report' }
+      - { flag: '-Format', arg: '<fmt>', help: 'htm, csv, txt, xml' }
+      - { flag: '-Display', arg: '<V>', help: 'V verbose, 1-4 show redirects/cookies/...' }
 
   - name: seclists-lite
     categories: [wordlists, passwords, web]

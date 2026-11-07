@@ -138,6 +138,7 @@ console.log('sync: web view demo from src/web');
 // the simulated session's catalog, in the shape of App::web_hello (plus the
 // install fields the mock needs), with placeholders expanded like registry.rs
 const rawRecipes = new Map(doc.tools.map((t) => [t.name, t.recipes ?? []]));
+const rawOptions = new Map(doc.tools.map((t) => [t.name, t.options ?? []]));
 const appDir = (name) => `C:\\Users\\you\\scoop\\apps\\${name}\\current`;
 const expand = (v, t) => (v ?? '').replaceAll('{scoop_app}', appDir(t.package)).replace(/\{app:([^}]+)\}/g, (_, n) => appDir(n));
 const demoTools = fileOrder.map((t) => ({
@@ -157,6 +158,8 @@ const demoTools = fileOrder.map((t) => ({
   // raw recipes; the mock fills {target} {file} {out} {wordlist} from the
   // active demo challenge, like App::web_state_json does
   recipes: (rawRecipes.get(t.name) ?? []).map((r) => ({ name: r.name, args: expand(r.args, t) })),
+  // the command helper's flags, as App::web_hello sends them
+  options: (rawOptions.get(t.name) ?? []).map((o) => ({ flag: o.flag, arg: o.arg ?? null, help: o.help })),
 }));
 const present = new Set(fileOrder.flatMap((t) => t.categories));
 const tabs = [

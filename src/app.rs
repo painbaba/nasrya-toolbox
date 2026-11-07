@@ -2803,6 +2803,9 @@ impl App {
                         Install::Pipx => "pipx",
                     },
                     "note": t.note,
+                    "options": t.options.iter().map(|o| serde_json::json!({
+                        "flag": o.flag, "arg": o.arg, "help": o.help,
+                    })).collect::<Vec<_>>(),
                 })
             })
             .collect();
@@ -2925,6 +2928,8 @@ impl App {
                 "target": w.info.target,
                 "flag_format": w.info.flag_format,
                 "files": w.files(),
+                // so the command helper can offer full paths to them
+                "files_dir": w.files_dir(),
             })),
             "recipes": recipes,
             "challenges": self
