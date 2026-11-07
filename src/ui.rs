@@ -219,17 +219,22 @@ fn style_output_line(l: &str) -> Span<'static> {
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     let content = match app.mode {
         Mode::Input | Mode::HashInput => {
-            let cursor = if (app.tick / 4).is_multiple_of(2) {
-                "█"
-            } else {
-                " "
-            };
             let (label, help) = if app.mode == Mode::HashInput {
-                (" hash ▸ ", "   (Enter to identify · Esc to cancel)")
+                (" hash ▸ ", "  Enter identify · Esc cancel")
             } else {
-                (" args ▸ ", "   (Enter to run · Esc to cancel)")
+                (" args ▸ ", "  Enter run · ↑↓ history · Esc cancel")
             };
-            Line::from(vec![
+            let label_w = label.chars().count() as u16 + 1; // + the space after it
+                                                            // Drop the help text when space is tight; the line itself matters more.
+            let help_w = help.chars().count() as u16;
+            let show_help = area.width > label_w + help_w + 20;
+            let text_w = area
+                .width
+                .saturating_sub(label_w + if show_help { help_w } else { 0 })
+                .max(1);
+            let (visible, col) = app.editor.view(text_w as usize);
+            f.set_cursor_position((area.x + label_w + col as u16, area.y));
+            let mut spans = vec![
                 Span::styled(
                     label,
                     Style::default()
@@ -237,10 +242,16 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
                         .bg(YELLOW)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(format!(" {}", app.input), Style::default().fg(FG)),
-                Span::styled(cursor.to_string(), Style::default().fg(YELLOW)),
-                Span::styled(help, Style::default().fg(DIM)),
-            ])
+                Span::raw(" "),
+                Span::styled(
+                    format!("{visible:<w$}", w = text_w as usize),
+                    Style::default().fg(FG),
+                ),
+            ];
+            if show_help {
+                spans.push(Span::styled(help, Style::default().fg(DIM)));
+            }
+            Line::from(spans)
         }
         Mode::Browsing => Line::from(vec![
             Span::styled(
@@ -268,4 +279,74 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
         ]),
     };
     f.render_widget(Paragraph::new(content), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use std::path::PathBuf;
+
+    fn app() -> App {
+        let cat = registry::parse(include_str!("../tools.yaml")).unwrap();
+        App::new(cat, PathBuf::from("tools.yaml"), None)
+    }
+
+    fn draw(app: &App, w: u16, h: u16) -> Terminal<TestBackend> {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| render(f, app)).unwrap();
+        t
+    }
+
+    fn row(t: &Terminal<TestBackend>, y: u16) -> String {
+        let buf = t.backend().buffer();
+        (0..buf.area.width)
+            .map(|x| buf[(x, y)].symbol().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn renders_at_common_and_tiny_sizes() {
+        let a = app();
+        for (w, h) in [(120, 40), (80, 24), (40, 10), (10, 4)] {
+            draw(&a, w, h);
+        }
+    }
+
+    #[test]
+    fn args_prompt_shows_text_and_places_cursor() {
+        let mut a = app();
+        a.mode = Mode::Input;
+        a.editor.set("-sV scanme.nmap.org");
+        a.editor.home();
+        let mut t = draw(&a, 100, 20);
+        let footer = row(&t, 19);
+        assert!(footer.contains("args ▸"), "{footer}");
+        assert!(footer.contains("-sV scanme.nmap.org"), "{footer}");
+        // cursor sits on the first character of the text
+        let label_w = " args ▸ ".chars().count() as u16 + 1;
+        assert_eq!(t.get_cursor_position().unwrap(), (label_w, 19).into());
+    }
+
+    #[test]
+    fn long_args_scroll_to_keep_the_cursor_visible() {
+        let mut a = app();
+        a.mode = Mode::Input;
+        let long = format!("-u https://example.com/{}END", "x".repeat(200));
+        a.editor.set(&long);
+        let mut t = draw(&a, 60, 12);
+        let footer = row(&t, 11);
+        assert!(footer.contains("END"), "{footer}");
+        assert!(t.get_cursor_position().unwrap().x < 60);
+    }
+
+    #[test]
+    fn hash_prompt_label() {
+        let mut a = app();
+        a.mode = Mode::HashInput;
+        let t = draw(&a, 100, 20);
+        assert!(row(&t, 19).contains("hash ▸"));
+    }
 }

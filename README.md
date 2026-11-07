@@ -127,6 +127,11 @@ pass `--catalog .\tools.yaml` to use it on purpose. The active path is shown in 
 | `h` | identify a hash (built in, works offline) |
 | `q` | quit |
 
+**Editing the args / hash prompt:** `←/→` move, `Ctrl+←/→` jump words, `Home/End` (or
+`Ctrl+A/E`), `Del`, `Ctrl+Backspace` / `Ctrl+W` delete a word, `Ctrl+U` clear to the start,
+`↑/↓` cycle through the arguments you used before with that tool (per session). Pasting a
+whole command line works too.
+
 **Arguments** are split on spaces. Use `"double"` or `'single'` quotes to keep spaces in
 one argument, e.g. `-H "User-Agent: nasrya"` or `-w "C:\My Lists\big.txt"`. Backslashes are
 literal (no need to double them), and `\"` is a literal quote. A quoted path can't end in a

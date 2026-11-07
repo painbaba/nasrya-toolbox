@@ -11,6 +11,7 @@ mod app;
 mod args;
 mod banner;
 mod detect;
+mod editor;
 mod envpath;
 mod hashid;
 mod install;
@@ -172,7 +173,12 @@ fn run_tui(explicit: Option<&Path>) -> Result<()> {
         return Ok(());
     }
     let mut terminal = ratatui::init();
+    // Bracketed paste: a pasted command line arrives as one Event::Paste
+    // instead of keystrokes that could trigger key bindings. Best-effort.
+    use ratatui::crossterm::{event, execute};
+    let _ = execute!(std::io::stdout(), event::EnableBracketedPaste);
     let result = App::new(catalog, path, ignored).run(&mut terminal);
+    let _ = execute!(std::io::stdout(), event::DisableBracketedPaste);
     ratatui::restore();
     result
 }

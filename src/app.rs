@@ -6,12 +6,13 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
 use anyhow::Result;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 
 use crate::args;
 use crate::banner;
 use crate::detect;
+use crate::editor::{History, LineEditor};
 use crate::envpath;
 use crate::hashid;
 use crate::install;
@@ -49,7 +50,8 @@ pub struct App {
     pub selected: usize,
     pub output: Vec<String>,
     pub mode: Mode,
-    pub input: String,
+    pub editor: LineEditor,
+    history: History,
     pub running: bool,
     pub running_pid: Option<u32>,
     pub status_line: String,
@@ -88,7 +90,8 @@ impl App {
             selected: 0,
             output,
             mode: Mode::Browsing,
-            input: String::new(),
+            editor: LineEditor::default(),
+            history: History::default(),
             running: false,
             running_pid: None,
             status_line: "detecting tools…".into(),
@@ -116,13 +119,16 @@ impl App {
             }
 
             if event::poll(Duration::from_millis(80))? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
-                        match self.screen {
-                            Screen::Splash => self.screen = Screen::Main,
-                            Screen::Main => self.on_key(key.code),
-                        }
+                match event::read()? {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => match self.screen {
+                        Screen::Splash => self.screen = Screen::Main,
+                        Screen::Main => self.on_key(key),
+                    },
+                    // bracketed paste: the whole pasted text arrives at once
+                    Event::Paste(text) if self.mode != Mode::Browsing => {
+                        self.editor.insert_str(&text)
                     }
+                    _ => {}
                 }
             }
             self.tick = self.tick.wrapping_add(1);
@@ -202,10 +208,19 @@ impl App {
         }
     }
 
-    fn on_key(&mut self, code: KeyCode) {
+    fn on_key(&mut self, key: KeyEvent) {
         match self.mode {
-            Mode::Browsing => self.on_key_browsing(code),
-            Mode::Input | Mode::HashInput => self.on_key_input(code),
+            Mode::Browsing => self.on_key_browsing(key.code),
+            Mode::Input | Mode::HashInput => self.on_key_input(key),
+        }
+    }
+
+    /// History key for the open prompt: the tool's name, or the hash prompt.
+    fn history_key(&self) -> String {
+        if self.mode == Mode::HashInput {
+            "\u{0}hashid".to_string()
+        } else {
+            self.tools[self.selected].name.clone()
         }
     }
 
@@ -226,7 +241,8 @@ impl App {
             KeyCode::Char('i') => self.install_selected(),
             KeyCode::Char('c') => self.cancel(),
             KeyCode::Char('h') => {
-                self.input.clear();
+                self.editor.set("");
+                self.history.reset();
                 self.mode = Mode::HashInput;
             }
             KeyCode::Enter => {
@@ -234,7 +250,8 @@ impl App {
                     self.status_line = "a process is already running (press c to cancel)".into();
                 } else {
                     let hint = self.tools[self.selected].args_hint.clone();
-                    self.input = hint.unwrap_or_default();
+                    self.editor.set(&hint.unwrap_or_default());
+                    self.history.reset();
                     self.mode = Mode::Input;
                 }
             }
@@ -242,14 +259,20 @@ impl App {
         }
     }
 
-    fn on_key_input(&mut self, code: KeyCode) {
-        match code {
+    fn on_key_input(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let e = &mut self.editor;
+        match key.code {
             KeyCode::Esc => {
                 self.mode = Mode::Browsing;
-                self.input.clear();
+                self.editor.set("");
+                self.history.reset();
             }
             KeyCode::Enter => {
-                let text = std::mem::take(&mut self.input);
+                let text = self.editor.take();
+                let hkey = self.history_key();
+                self.history.push(&hkey, &text);
                 let mode = std::mem::replace(&mut self.mode, Mode::Browsing);
                 if mode == Mode::HashInput {
                     self.identify_hash(&text);
@@ -257,10 +280,35 @@ impl App {
                     self.launch(&text);
                 }
             }
-            KeyCode::Backspace => {
-                self.input.pop();
+            KeyCode::Up => {
+                let hkey = self.history_key();
+                let cur = self.editor.text();
+                if let Some(line) = self.history.older(&hkey, &cur) {
+                    self.editor.set(&line);
+                }
             }
-            KeyCode::Char(c) => self.input.push(c),
+            KeyCode::Down => {
+                let hkey = self.history_key();
+                if let Some(line) = self.history.newer(&hkey) {
+                    self.editor.set(&line);
+                }
+            }
+            KeyCode::Left if ctrl => e.word_left(),
+            KeyCode::Right if ctrl => e.word_right(),
+            KeyCode::Left => e.left(),
+            KeyCode::Right => e.right(),
+            KeyCode::Home => e.home(),
+            KeyCode::End => e.end(),
+            KeyCode::Backspace if ctrl => e.delete_word_left(),
+            KeyCode::Backspace => e.backspace(),
+            KeyCode::Delete => e.delete(),
+            KeyCode::Char('u') if ctrl => e.clear_to_start(),
+            KeyCode::Char('w') if ctrl => e.delete_word_left(),
+            KeyCode::Char('a') if ctrl => e.home(),
+            KeyCode::Char('e') if ctrl => e.end(),
+            // other Ctrl/Alt chords aren't text
+            KeyCode::Char(_) if ctrl || alt => {}
+            KeyCode::Char(c) => e.insert(c),
             _ => {}
         }
     }
