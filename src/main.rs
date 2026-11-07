@@ -15,6 +15,7 @@ mod banner;
 mod detect;
 mod editor;
 mod envpath;
+mod flags;
 mod hashid;
 mod install;
 mod registry;

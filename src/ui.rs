@@ -65,6 +65,8 @@ pub fn render(f: &mut Frame, app: &App) {
         render_provider_picker(f, app, pick, &th, area);
     } else if let Some(ag) = &app.agent {
         render_agent(f, ag, &th, area);
+    } else if let Some(cur) = app.flags_view {
+        render_flags(f, app, cur, &th, area);
     } else if app.show_help {
         render_help(f, &th, area);
     }
@@ -107,9 +109,16 @@ pub const HELP: &[(&str, &str)] = &[
     ("r", "re-detect installed tools (picks up PATH changes)"),
     ("PgUp PgDn", "scroll the terminal · Home top · End follow"),
     ("f  n  N", "find in the output · older / newer match"),
+    (
+        "F",
+        "flags caught in tool output: list, Enter copies (each is also copied and saved)",
+    ),
     ("h", "identify a hash (built in)"),
     ("a", "agent: AI reads the output and suggests next steps"),
-    ("A", "choose the agent's AI (claude / gemini / deepseek / openai / ollama)"),
+    (
+        "A",
+        "choose the agent's AI (claude / gemini / deepseek / openai / ollama)",
+    ),
     ("t", "appearance: theme, borders, glyphs, overlays"),
     (
         "w  W",
@@ -257,8 +266,7 @@ fn render_provider_picker(f: &mut Frame, app: &App, pick: &ProviderPick, th: &Th
             Span::styled(prov.status_note(), th.fg(note_color)),
         ]));
         // model line under each provider
-        if sel && pick.editing.is_some() {
-            let ed = pick.editing.as_ref().unwrap();
+        if let (true, Some(ed)) = (sel, pick.editing.as_ref()) {
             lines.push(Line::from(vec![
                 Span::styled("      model: ", th.fg(p.dim)),
                 Span::styled(ed.text().to_string(), th.strong(p.accent)),
@@ -324,7 +332,10 @@ fn render_agent(f: &mut Frame, ag: &AgentView, th: &Theme, area: Rect) {
             th.fg(p.dim),
         )));
     } else {
-        lines.push(Line::from(Span::styled("suggested next steps", th.strong(p.accent))));
+        lines.push(Line::from(Span::styled(
+            "suggested next steps",
+            th.strong(p.accent),
+        )));
         for (i, s) in a.suggestions.iter().enumerate() {
             let sel = i == ag.cursor;
             let name_style = if sel {
@@ -353,7 +364,11 @@ fn render_agent(f: &mut Frame, ag: &AgentView, th: &Theme, area: Rect) {
     f.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: true })
-            .block(overlay_block(th, "agent", "↑↓ pick · Enter run · Esc close")),
+            .block(overlay_block(
+                th,
+                "agent",
+                "↑↓ pick · Enter run · Esc close",
+            )),
         popup,
     );
 }
@@ -532,8 +547,8 @@ fn render_header(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Min(10),
-            Constraint::Length(10),          // agent icon
-            Constraint::Length(52 + web_w),  // install stats (+ web indicator)
+            Constraint::Length(10),         // agent icon
+            Constraint::Length(52 + web_w), // install stats (+ web indicator)
         ])
         .split(area);
 
@@ -1029,7 +1044,7 @@ fn render_session(f: &mut Frame, app: &App, th: &Theme, area: Rect, pos: usize, 
     // newest output below the pane.
     let inner_height = area.height.saturating_sub(2) as usize;
     let inner_width = area.width.saturating_sub(2) as usize;
-    let (rows, max_scroll) = visible_rows(&s.output, inner_width, inner_height, s.scroll);
+    let (rows, max_scroll) = visible_rows_at(&s.output, inner_width, inner_height, s.scroll);
     s.view.set((inner_height, max_scroll, inner_width));
     let text: Vec<Line> = if s.output.is_empty() {
         vec![Line::from(Span::styled(
@@ -1038,12 +1053,15 @@ fn render_session(f: &mut Frame, app: &App, th: &Theme, area: Rect, pos: usize, 
         ))]
     } else {
         rows.into_iter()
-            .map(|(i, chunk)| {
+            .map(|(i, offset, chunk)| {
                 let mut style = line_style(th, &s.output[i]);
                 if s.search_hit == Some(i) {
                     style = th.emph(style.bg(p.hit_bg));
                 }
-                Line::from(Span::styled(chunk, style))
+                let flag = th
+                    .strong(p.accent)
+                    .add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
+                Line::from(flag_spans(&s.output[i], offset, chunk, style, flag))
             })
             .collect()
     };
@@ -1101,19 +1119,67 @@ fn state_line(app: &App, th: &Theme, s: &Session) -> Line<'static> {
     }
 }
 
+/// Split one wrapped row into spans, drawing any flag in it with `flag`.
+/// `offset` is where the row starts in the source line, in characters.
+fn flag_spans(
+    source: &str,
+    offset: usize,
+    chunk: String,
+    base: Style,
+    flag: Style,
+) -> Vec<Span<'static>> {
+    let hits = crate::flags::find(source);
+    if hits.is_empty() {
+        return vec![Span::styled(chunk, base)];
+    }
+    let chars: Vec<char> = chunk.chars().collect();
+    let mut spans = Vec::new();
+    let mut run = String::new();
+    let mut run_flag = false;
+    for (k, ch) in chars.iter().enumerate() {
+        let at = offset + k;
+        let in_flag = hits.iter().any(|h| at >= h.start && at < h.end);
+        if in_flag != run_flag && !run.is_empty() {
+            spans.push(Span::styled(
+                std::mem::take(&mut run),
+                if run_flag { flag } else { base },
+            ));
+        }
+        run_flag = in_flag;
+        run.push(*ch);
+    }
+    if !run.is_empty() {
+        spans.push(Span::styled(run, if run_flag { flag } else { base }));
+    }
+    spans
+}
+
 /// Hard-wrap `output` to `width` columns and return the `height` rows that
 /// are visible `scroll` rows above the bottom, as (source line index, text),
 /// plus the largest useful scroll value. Only walks as far back as needed.
+#[cfg(test)]
 pub fn visible_rows(
     output: &[String],
     width: usize,
     height: usize,
     scroll: usize,
 ) -> (Vec<(usize, String)>, usize) {
+    let (rows, max) = visible_rows_at(output, width, height, scroll);
+    (rows.into_iter().map(|(i, _, t)| (i, t)).collect(), max)
+}
+
+/// `visible_rows`, plus where each row starts in its source line (in
+/// characters), so a highlight can follow a flag across wrapped rows.
+pub fn visible_rows_at(
+    output: &[String],
+    width: usize,
+    height: usize,
+    scroll: usize,
+) -> (Vec<(usize, usize, String)>, usize) {
     let width = width.max(1);
     let need = scroll + height;
     // rows collected bottom-up; past `need` rows we only count (for max_scroll)
-    let mut rows: Vec<(usize, String)> = Vec::new();
+    let mut rows: Vec<(usize, usize, String)> = Vec::new();
     let mut total_rows = 0usize;
     for (i, line) in output.iter().enumerate().rev() {
         let chars: Vec<char> = line.chars().collect();
@@ -1125,14 +1191,14 @@ pub fn visible_rows(
             } else {
                 chars.chunks(width).map(|c| c.iter().collect()).collect()
             };
-            for chunk in chunks.into_iter().rev() {
-                rows.push((i, chunk));
+            for (k, chunk) in chunks.into_iter().enumerate().rev() {
+                rows.push((i, k * width, chunk));
             }
         }
     }
     let max_scroll = total_rows.saturating_sub(height);
     let scroll = scroll.min(max_scroll);
-    let visible: Vec<(usize, String)> = rows
+    let visible: Vec<(usize, usize, String)> = rows
         .into_iter()
         .skip(scroll)
         .take(height)
@@ -1355,6 +1421,57 @@ fn render_toasts(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             r,
         );
     }
+}
+
+/// The `F` overlay: every flag caught this session, newest first.
+fn render_flags(f: &mut Frame, app: &App, cur: usize, th: &Theme, area: Rect) {
+    let p = &th.pal;
+    let g = th.glyph;
+    let mut lines: Vec<Line> = Vec::new();
+    if app.flags.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " no flags yet: anything like picoCTF{…} or HTB{…} in a tool's output lands here",
+            th.fg(p.dim),
+        )));
+    }
+    let n = app.flags.len();
+    for (row, fl) in app.flags.iter().rev().enumerate() {
+        let on = row == cur.min(n.saturating_sub(1));
+        let time = fl.at.get(11..16).unwrap_or("");
+        let mut spans = vec![
+            Span::styled(if on { g.pointer } else { "  " }, th.fg(p.accent)),
+            Span::styled(
+                fl.text.clone(),
+                if on {
+                    th.selected()
+                } else if fl.known {
+                    th.strong(p.accent)
+                } else {
+                    th.fg(p.fg)
+                },
+            ),
+        ];
+        if !fl.known {
+            spans.push(Span::styled("  likely", th.fg(p.warn)));
+        }
+        spans.push(Span::styled(
+            format!("  {} · {time}", fl.source),
+            th.fg(p.dim),
+        ));
+        lines.push(Line::from(spans));
+    }
+    let w = lines.iter().map(|l| l.width()).max().unwrap_or(40) as u16 + 4;
+    let h = lines.len().min(20) as u16 + 2;
+    let popup = overlay_area(f, th, area, w.max(50), h);
+    let title = format!("flags · {n}");
+    f.render_widget(
+        Paragraph::new(lines).block(overlay_block(
+            th,
+            &title,
+            "↑↓ choose · Enter copy · Esc close",
+        )),
+        popup,
+    );
 }
 
 /// What each step of the welcome tour says.
@@ -1775,6 +1892,60 @@ mod tests {
             // the full badge is there, inside the border
             assert!(r.contains("+ get ") && r.ends_with('│'), "row {y}: {r}");
         }
+    }
+
+    #[test]
+    fn flags_are_highlighted_even_when_wrapped() {
+        let mut a = app();
+        // a narrow terminal: the flag wraps onto the next row
+        let pad = "x".repeat(60);
+        put(
+            &mut a,
+            0,
+            "strings",
+            &[&format!("{pad} picoCTF{{wr4pped_r0w_fl4g}} tail")],
+            RunState::Exited(Some(0)),
+        );
+        a.focus = 1;
+        let t = draw(&a, 140, 30);
+        let buf = t.backend().buffer();
+        let mut underlined = String::new();
+        for y in 0..30 {
+            for x in 0..140 {
+                let cell = &buf[(x, y)];
+                if cell.modifier.contains(Modifier::UNDERLINED) && x > 50 {
+                    underlined.push_str(cell.symbol());
+                }
+            }
+        }
+        assert!(
+            underlined.contains("picoCTF{wr4pped_r0w_fl4g}"),
+            "{underlined}"
+        );
+        assert!(!underlined.contains("tail"));
+    }
+
+    #[test]
+    fn flags_overlay_lists_newest_first() {
+        let mut a = app();
+        for (t, known) in [("flag{first}", true), ("HACK{s3c0nd}", false)] {
+            a.flags.push(crate::app::Flag {
+                text: t.into(),
+                known,
+                source: "nmap".into(),
+                at: "2026-11-07 17:04:21 UTC".into(),
+            });
+        }
+        a.flags_view = Some(0);
+        let t = draw(&a, 120, 30);
+        let sc = screen(&t, 30);
+        let first = sc.find("HACK{s3c0nd}").expect("newest listed");
+        let second = sc.find("flag{first}").expect("oldest listed");
+        assert!(first < second, "newest first:\n{sc}");
+        assert!(sc.contains("likely") && sc.contains("17:04") && sc.contains("flags · 2"));
+        // and an empty list explains itself
+        a.flags.clear();
+        assert!(screen(&draw(&a, 120, 30), 30).contains("no flags yet"));
     }
 
     #[test]

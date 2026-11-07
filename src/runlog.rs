@@ -109,6 +109,11 @@ fn civil(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
     )
 }
 
+/// Now, as `2026-11-07 03:15:02 UTC`.
+pub fn stamp_iso_now() -> String {
+    stamp_iso(unix_now())
+}
+
 /// Now, as a sortable, filename-safe stamp (`20261107-031502Z`).
 pub fn stamp_now() -> String {
     stamp_compact(unix_now())

@@ -276,6 +276,27 @@ kbd {
 .cat-blurb::first-letter { text-transform: uppercase; }
 
 .tools { flex: 1; overflow-y: auto; padding: 6px 8px 12px; }
+
+.flags {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px 12px;
+  max-height: 38%;
+  overflow-y: auto;
+}
+.flags h2 {
+  margin: 0 0 8px; color: var(--faint);
+  font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+}
+.flags ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.flag {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-items: center;
+}
+.flag code {
+  overflow-wrap: anywhere; font-size: 12.5px;
+}
+.flag.known code { font-weight: 700; }
+.flag .flag-meta { grid-column: 1; color: var(--faint); font-size: 11.5px; }
+.flag .btn { grid-column: 2; grid-row: 1 / span 2; }
 .group {
   padding: 12px 10px 4px; color: var(--faint);
   font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;

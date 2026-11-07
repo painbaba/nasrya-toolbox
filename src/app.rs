@@ -210,6 +210,18 @@ pub struct Toast {
     pub born: Instant,
 }
 
+/// A flag the catcher found in some tool's output.
+#[derive(Debug, Clone)]
+pub struct Flag {
+    pub text: String,
+    /// A known prefix (`picoCTF{`), not a generic `WORD{` guess.
+    pub known: bool,
+    /// The terminal's title (tool name, or "console").
+    pub source: String,
+    /// `2026-11-07 17:04:21 UTC`
+    pub at: String,
+}
+
 /// How long a toast stays up, and how many stack at once.
 pub const TOAST_LIFE: Duration = Duration::from_secs(4);
 pub const MAX_TOASTS: usize = 3;
@@ -301,6 +313,10 @@ pub struct App {
     pub settings: Settings,
     /// The `t` appearance overlay, when open.
     pub appearance: Option<Appearance>,
+    /// Flags caught in tool output this session, oldest first, no repeats.
+    pub flags: Vec<Flag>,
+    /// The `F` flags list, when open: the highlighted row (0 = newest).
+    pub flags_view: Option<usize>,
     /// Corner notifications, oldest first.
     pub toasts: Vec<Toast>,
     /// Step of the first-run welcome tour, while it's open.
@@ -385,6 +401,8 @@ impl App {
             show_help: false,
             settings: Settings::default(),
             appearance: None,
+            flags: Vec::new(),
+            flags_view: None,
             toasts: Vec::new(),
             tour: None,
             mono: crate::theme::no_color(),
@@ -536,6 +554,87 @@ impl App {
     pub fn expire_toasts(&mut self, now: Instant) {
         self.toasts
             .retain(|t| now.saturating_duration_since(t.born) < TOAST_LIFE);
+    }
+
+    // ---------------------------------------------------------------- flags
+
+    /// Look for flags in a line of output from terminal `pos`. A new one is
+    /// listed, announced, copied to the clipboard and saved to flags.txt.
+    fn catch_flags(&mut self, pos: usize, line: &str) {
+        for hit in crate::flags::find(line) {
+            if self.flags.iter().any(|f| f.text == hit.text) {
+                continue;
+            }
+            let source = self
+                .session(pos)
+                .map_or_else(|| "console".to_string(), |s| s.title.clone());
+            let flag = Flag {
+                text: hit.text.clone(),
+                known: hit.known,
+                source: source.clone(),
+                at: crate::runlog::stamp_iso_now(),
+            };
+            // tests must not touch the real clipboard or %LOCALAPPDATA%
+            let copied = !cfg!(test) && runner::copy_to_clipboard(&flag.text).is_ok();
+            if !cfg!(test) {
+                Self::save_flag(&flag, line);
+            }
+            let kind = if hit.known { "flag" } else { "likely flag" };
+            self.toast(ToastKind::Ok, format!("{kind} found: {}", flag.text));
+            self.status_line = format!(
+                "{kind} in {source}: {}{} · F lists them all",
+                flag.text,
+                if copied { " · copied" } else { "" }
+            );
+            self.flags.push(flag);
+        }
+    }
+
+    /// Append one line per flag to `%LOCALAPPDATA%\winsploit\flags.txt`.
+    fn save_flag(flag: &Flag, line: &str) {
+        use std::io::Write;
+        let Some(dir) = crate::runlog::log_dir().parent().map(|p| p.to_path_buf()) else {
+            return;
+        };
+        let _ = std::fs::create_dir_all(&dir);
+        let context: String = line.chars().take(300).collect();
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("flags.txt"))
+        {
+            let _ = writeln!(
+                f,
+                "{}\t{}\t{}\t{}",
+                flag.at,
+                flag.source,
+                flag.text,
+                context.trim()
+            );
+        }
+    }
+
+    /// Keys while the `F` flags list is open (newest first).
+    fn on_key_flags(&mut self, code: KeyCode) {
+        let Some(cur) = self.flags_view else {
+            return;
+        };
+        let n = self.flags.len();
+        match code {
+            KeyCode::Up | KeyCode::Char('k') => self.flags_view = Some(cur.saturating_sub(1)),
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.flags_view = Some((cur + 1).min(n.saturating_sub(1)))
+            }
+            KeyCode::Enter | KeyCode::Char('y') if n > 0 => {
+                let text = self.flags[n - 1 - cur.min(n - 1)].text.clone();
+                self.status_line = match runner::copy_to_clipboard(&text) {
+                    Ok(()) => format!("copied {text}"),
+                    Err(e) => format!("couldn't copy: {e}"),
+                };
+            }
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('F') => self.flags_view = None,
+            _ => {}
+        }
     }
 
     // ----------------------------------------------------------------- tour
@@ -855,6 +954,7 @@ impl App {
                     return; // its terminal was closed or replaced
                 };
                 let seen = self.on_screen(pos);
+                self.catch_flags(pos, &line);
                 if let Some(s) = self.session_mut(pos) {
                     s.output_line(line);
                     s.unread |= !seen;
@@ -1004,6 +1104,10 @@ impl App {
             self.on_key_appearance(key.code);
             return;
         }
+        if self.flags_view.is_some() {
+            self.on_key_flags(key.code);
+            return;
+        }
         if self.provider_pick.is_some() {
             self.on_key_provider(key.code);
             return;
@@ -1148,6 +1252,13 @@ impl App {
             KeyCode::Char('f') => {
                 self.editor.set(&self.search.clone());
                 self.mode = Mode::Search;
+            }
+            KeyCode::Char('F') => {
+                self.flags_view = Some(0);
+                if self.flags.is_empty() {
+                    self.status_line =
+                        "no flags yet · they're caught from tool output automatically".into();
+                }
             }
             KeyCode::Char('n') => self.find_next(true),
             KeyCode::Char('N') => self.find_next(false),
@@ -1916,6 +2027,16 @@ impl App {
             "detecting": self.detecting,
             "status_line": self.status_line,
             "history": history,
+            "flags": self
+                .flags
+                .iter()
+                .map(|f| serde_json::json!({
+                    "text": f.text,
+                    "known": f.known,
+                    "source": f.source,
+                    "at": f.at,
+                }))
+                .collect::<Vec<_>>(),
             "viewers": self.web.as_ref().map_or(0, |w| w.viewers()),
             "lan": self.web.as_ref().is_some_and(|w| w.lan()),
         })
@@ -2119,7 +2240,8 @@ impl App {
                 return;
             }
             agent::Availability::NeedsCurl => {
-                self.console.push("[err] HTTP providers need `curl` on PATH (ships with Windows 10/11).");
+                self.console
+                    .push("[err] HTTP providers need `curl` on PATH (ships with Windows 10/11).");
                 self.status_line = "curl not found".into();
                 return;
             }
@@ -2225,7 +2347,8 @@ impl App {
             Ok(_) => self.status_line = ok_msg.to_string(),
             Err(e) => {
                 self.status_line = format!("{ok_msg} (not saved)");
-                self.console.push(format!("[err] couldn't save settings: {e}"));
+                self.console
+                    .push(format!("[err] couldn't save settings: {e}"));
             }
         }
     }
@@ -2401,6 +2524,38 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("Containers-DisposableClientVM")));
         }
+    }
+
+    #[test]
+    fn flags_in_output_are_caught_once() {
+        let mut a = app();
+        let out = |line: &str| AppEvent::Output {
+            sid: CONSOLE,
+            line: line.to_string(),
+        };
+        a.on_runner_event(out("nothing here {a:1}"));
+        assert!(a.flags.is_empty());
+        a.on_runner_event(out("Secret: picoCTF{unp4ck3d} and HACK{c0ffee_cup}"));
+        assert_eq!(a.flags.len(), 2);
+        assert!(a.flags[0].known && !a.flags[1].known);
+        assert_eq!(a.flags[0].source, "console");
+        assert!(a
+            .toasts
+            .iter()
+            .any(|t| t.text.contains("picoCTF{unp4ck3d}")));
+        assert!(a.status_line.contains("F lists"), "{}", a.status_line);
+        // the same flag again is not a new one
+        a.on_runner_event(out("again: picoCTF{unp4ck3d}"));
+        assert_eq!(a.flags.len(), 2);
+        // F opens the list, keys move within it, Esc closes it
+        a.on_key(KeyEvent::new(KeyCode::Char('F'), KeyModifiers::SHIFT));
+        assert_eq!(a.flags_view, Some(0));
+        a.on_key(key(KeyCode::Down));
+        a.on_key(key(KeyCode::Down));
+        assert_eq!(a.flags_view, Some(1), "clamped to the last row");
+        a.on_key(key(KeyCode::Esc));
+        assert_eq!(a.flags_view, None);
+        assert!(a.web_state_json().contains("HACK{c0ffee_cup}"));
     }
 
     #[test]

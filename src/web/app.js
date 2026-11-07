@@ -205,6 +205,47 @@ function onState(st) {
   renderTools();
   renderCard();
   renderTerminals();
+  renderFlags();
+}
+
+// Flags caught in tool output (newest first). Copying happens here in the
+// page; nothing is sent back to winsploit.
+function renderFlags() {
+  const flags = (S.st && S.st.flags) || [];
+  $('flags').hidden = flags.length === 0;
+  $('flag-count').textContent = flags.length;
+  const list = $('flag-list');
+  list.replaceChildren();
+  for (const f of flags.slice().reverse()) {
+    const li = document.createElement('li');
+    li.className = f.known ? 'flag known' : 'flag';
+    const code = document.createElement('code');
+    code.textContent = f.text;
+    const meta = document.createElement('span');
+    meta.className = 'flag-meta';
+    meta.textContent = `${f.known ? '' : 'likely · '}${f.source} · ${(f.at || '').slice(11, 16)}`;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn small';
+    btn.textContent = 'Copy';
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(f.text);
+        btn.textContent = 'Copied';
+      } catch {
+        // plain-HTTP LAN pages have no clipboard API: select it instead
+        const r = document.createRange();
+        r.selectNodeContents(code);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+        btn.textContent = 'Selected';
+      }
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+    });
+    li.append(code, meta, btn);
+    list.append(li);
+  }
 }
 
 function onOut(o) {
