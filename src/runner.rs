@@ -218,31 +218,118 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
         .map(|_| ())
 }
 
-/// Put `text` on the Windows clipboard via clip.exe. clip reads its stdin in
-/// the console's codepage, so send UTF-16LE with a BOM, which it always
-/// understands, to keep non-ASCII paths intact.
+// The Win32 clipboard calls (user32 / kernel32), declared here rather than
+// pulling in a bindings crate for six functions.
+mod win32 {
+    use std::ffi::c_void;
+    #[link(name = "user32")]
+    extern "system" {
+        pub fn OpenClipboard(owner: *mut c_void) -> i32;
+        pub fn CloseClipboard() -> i32;
+        pub fn EmptyClipboard() -> i32;
+        pub fn SetClipboardData(format: u32, mem: *mut c_void) -> *mut c_void;
+        #[cfg(test)]
+        pub fn GetClipboardData(format: u32) -> *mut c_void;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        pub fn GlobalAlloc(flags: u32, bytes: usize) -> *mut c_void;
+        pub fn GlobalLock(mem: *mut c_void) -> *mut c_void;
+        pub fn GlobalUnlock(mem: *mut c_void) -> i32;
+        pub fn GlobalFree(mem: *mut c_void) -> *mut c_void;
+    }
+    pub const CF_UNICODETEXT: u32 = 13;
+    pub const GMEM_MOVEABLE: u32 = 0x0002;
+}
+
+/// Open the clipboard, retrying briefly: another app may hold it for a
+/// moment. Pair every success with `CloseClipboard`.
+fn open_clipboard() -> std::io::Result<()> {
+    for _ in 0..20 {
+        // SAFETY: no pointers involved; a null owner is allowed.
+        if unsafe { win32::OpenClipboard(std::ptr::null_mut()) } != 0 {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    Err(std::io::Error::last_os_error())
+}
+
+/// Put exactly `text` on the Windows clipboard as Unicode text.
+///
+/// This used to pipe UTF-16 into clip.exe, which keeps the byte-order mark
+/// (an invisible U+FEFF in front of every copy, so a pasted flag no longer
+/// matched) and garbles input without one. The clipboard API has neither
+/// problem.
 pub fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut child = Command::new("clip")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-    let mut bytes = vec![0xFF, 0xFE];
-    for u in text.encode_utf16() {
-        bytes.extend_from_slice(&u.to_le_bytes());
-    }
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(&bytes)?;
-    }
-    let status = child.wait()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(std::io::Error::other(format!(
-            "clip.exe exited with {status}"
-        )))
-    }
+    use win32::*;
+    let wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+    open_clipboard()?;
+    // SAFETY: the clipboard is open (closed below on every path). `mem` is a
+    // fresh movable block of exactly `wide.len()` u16s; we write through the
+    // locked pointer only within that size, unlock it, and hand it to the
+    // clipboard, which owns it from then on. If any step fails we free it.
+    let result = unsafe {
+        if EmptyClipboard() == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            let mem = GlobalAlloc(GMEM_MOVEABLE, wide.len() * 2);
+            if mem.is_null() {
+                Err(std::io::Error::last_os_error())
+            } else {
+                let dst = GlobalLock(mem) as *mut u16;
+                if dst.is_null() {
+                    let e = std::io::Error::last_os_error();
+                    GlobalFree(mem);
+                    Err(e)
+                } else {
+                    std::ptr::copy_nonoverlapping(wide.as_ptr(), dst, wide.len());
+                    GlobalUnlock(mem);
+                    if SetClipboardData(CF_UNICODETEXT, mem).is_null() {
+                        let e = std::io::Error::last_os_error();
+                        GlobalFree(mem);
+                        Err(e)
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
+        }
+    };
+    // SAFETY: we opened it above.
+    unsafe { CloseClipboard() };
+    result
+}
+
+/// The clipboard's Unicode text, for the round-trip test.
+#[cfg(test)]
+fn read_clipboard() -> std::io::Result<String> {
+    use win32::*;
+    open_clipboard()?;
+    // SAFETY: the clipboard is open; the handle stays owned by the
+    // clipboard; we read the NUL-terminated UTF-16 while it's locked.
+    let out = unsafe {
+        let h = GetClipboardData(CF_UNICODETEXT);
+        let p = if h.is_null() {
+            std::ptr::null_mut()
+        } else {
+            GlobalLock(h) as *const u16
+        };
+        if p.is_null() {
+            Err(std::io::Error::last_os_error())
+        } else {
+            let mut n = 0;
+            while *p.add(n) != 0 {
+                n += 1;
+            }
+            let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, n));
+            GlobalUnlock(h);
+            Ok(s)
+        }
+    };
+    // SAFETY: opened above.
+    unsafe { CloseClipboard() };
+    out
 }
 
 /// Kill a process and its whole tree (taskkill /T). Best-effort.
@@ -257,6 +344,19 @@ pub fn kill_tree(pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::clean_line;
+
+    /// Replaces the real clipboard, so it only runs on request:
+    /// `cargo test clipboard -- --ignored`
+    #[test]
+    #[ignore]
+    fn clipboard_round_trip_is_exact() {
+        for text in ["picoCTF{n0_b0m_h3r3}", "C:\\Users\\Zoé\\ctf\\chall 1", ""] {
+            super::copy_to_clipboard(text).unwrap();
+            let back = super::read_clipboard().unwrap();
+            assert_eq!(back, text, "clipboard changed the text");
+            assert!(!back.starts_with('\u{feff}'));
+        }
+    }
 
     /// Input typed in the UI reaches the tool, and dropping the pipe is EOF:
     /// `sort` only prints once its input ends.
