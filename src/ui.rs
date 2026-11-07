@@ -89,72 +89,137 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 }
 
-/// Every key binding, shown by `?`.
-pub const HELP: &[(&str, &str)] = &[
-    ("↑ ↓  j k", "move in the tool list"),
-    (
+/// One titled section of the `?` overlay.
+pub struct HelpGroup {
+    /// shown before the heading when symbol icons are on
+    pub icon: &'static str,
+    pub title: &'static str,
+    /// (keys, what they do); add a new key as a row in its group
+    pub rows: &'static [(&'static str, &'static str)],
+}
+
+/// Every key binding, grouped, shown by `?`.
+pub const HELP: &[HelpGroup] = &[
+    HelpGroup {
+        icon: "◆",
+        title: "Navigate",
+        rows: &[
+            ("↑ ↓  j k", "move in the tool list"),
+            (
         "← →  [ ]",
         "switch category: All · Installed · OSINT … Wordlists",
     ),
-    ("/", "filter tools by name / category / description"),
-    (
+            ("/", "filter tools by name / category / description"),
+        ],
+    },
+    HelpGroup {
+        icon: "▶",
+        title: "Run & terminals",
+        rows: &[
+            (
         "Enter",
         "run the tool: pick a recipe (if it has some), edit the args, run · dataset: list it",
     ),
-    (
+            (
         "0-4  Tab",
         "show the console (0) or terminal 1-4 · Tab cycles",
     ),
-    ("g", "grid: all four terminals at once"),
-    ("s", "send a line to the shown tool's input · Ctrl+D = EOF"),
-    (
+            ("g", "grid: all four terminals at once"),
+            ("s", "send a line to the shown tool's input · Ctrl+D = EOF"),
+            (
         "S",
         "run the tool in Windows Sandbox: sample read-only, network off (Tab)",
     ),
-    ("c", "stop the shown tool (its output stays)"),
-    (
+            ("c", "stop the shown tool (its output stays)"),
+            (
         "x",
         "close the shown terminal (twice if its tool is running)",
     ),
-    (
-        "i",
-        "install the selected tool (scoop / pipx), in the console",
-    ),
-    ("r", "re-detect installed tools (picks up PATH changes)"),
-    ("PgUp PgDn", "scroll the terminal · Home top · End follow"),
-    ("f  n  N", "find in the output · older / newer match"),
-    (
+        ],
+    },
+    HelpGroup {
+        icon: "≡",
+        title: "Output",
+        rows: &[
+            ("PgUp PgDn", "scroll the terminal · Home top · End follow"),
+            ("f  n  N", "find in the output · older / newer match"),
+        ],
+    },
+    HelpGroup {
+        icon: "⚑",
+        title: "CTF",
+        rows: &[
+            (
         "C",
         "challenge: new / switch · target, flag format, files, notes (%USERPROFILE%\\ctf)",
     ),
-    (
+            (
         "F",
         "flags caught in tool output: list, Enter copies (each is also copied and saved)",
     ),
-    ("h", "identify a hash (built in)"),
-    ("a", "agent: AI reads the output and suggests next steps"),
-    (
+            ("h", "identify a hash (built in)"),
+        ],
+    },
+    HelpGroup {
+        icon: "✚",
+        title: "Tools",
+        rows: &[
+            (
+        "i",
+        "install the selected tool (scoop / pipx), in the console",
+    ),
+            ("r", "re-detect installed tools (picks up PATH changes)"),
+        ],
+    },
+    HelpGroup {
+        icon: "✦",
+        title: "Agent",
+        rows: &[
+            ("a", "agent: AI reads the output and suggests next steps"),
+            (
         "A",
         "choose the agent's AI (claude / gemini / deepseek / openai / ollama)",
     ),
-    ("t", "appearance: theme, borders, glyphs, overlays"),
-    (
+        ],
+    },
+    HelpGroup {
+        icon: "☍",
+        title: "Web / LAN",
+        rows: &[
+            (
         "w  W",
         "web view: this session in a browser (W: on your LAN)",
     ),
-    ("o", "open the web view in your browser"),
-    (
+            ("o", "open the web view in your browser"),
+            (
         "L",
         "LAN guests: join key · let in (v watch, f full) · x remove · n new key",
     ),
-    ("?", "this help"),
-    ("q  Esc", "quit (twice if tools are still running)"),
-    ("", ""),
-    (
-        "in prompts",
-        "← → Home End · Ctrl+← → words · Ctrl+W / Ctrl+U delete · ↑ ↓ history",
-    ),
+        ],
+    },
+    HelpGroup {
+        icon: "⚙",
+        title: "App",
+        rows: &[
+            ("t", "appearance: theme, borders, glyphs, overlays"),
+            ("?", "this help"),
+            ("q  Esc", "quit (twice if tools are still running)"),
+        ],
+    },
 ];
+
+/// The "in prompts" line kept under the groups.
+pub const HELP_PROMPTS: (&str, &str) = (
+    "in prompts",
+    "← → Home End · Ctrl+← → words · Ctrl+W / Ctrl+U delete · ↑ ↓ history",
+);
+
+/// Every (keys, description) row, flattened.
+pub fn help_rows() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
+    HELP.iter()
+        .flat_map(|g| g.rows.iter())
+        .chain(std::iter::once(&HELP_PROMPTS))
+}
 
 // ---------------------------------------------------------------- overlays
 
@@ -328,6 +393,22 @@ fn render_lan_panel(f: &mut Frame, app: &App, cur: usize, th: &Theme, area: Rect
         None => key.push(Span::styled("none", th.fg(pal.dim))),
     }
     lines.push(Line::from(key));
+    let mut fw = vec![label("firewall")];
+    match app.fw_port {
+        Some(p) => {
+            fw.push(Span::styled(
+                format!("{} open", crate::firewall::rule_name(p)),
+                th.fg(pal.ok),
+            ));
+            fw.push(Span::styled("  c closes it", th.fg(pal.dim)));
+        }
+        None if app.fw_note.is_empty() => fw.push(Span::styled("no rule open", th.fg(pal.dim))),
+        None => fw.push(Span::styled(
+            "not managed (see the console)",
+            th.fg(pal.warn),
+        )),
+    }
+    lines.push(Line::from(fw));
     lines.push(Line::raw(""));
 
     let guests = &app.lan_guests;
@@ -388,22 +469,105 @@ fn render_lan_panel(f: &mut Frame, app: &App, cur: usize, th: &Theme, area: Rect
     );
 }
 
+/// Word-wrap `text` to `width` columns (at least one word per line).
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        match lines.last_mut() {
+            Some(l) if l.chars().count() + 1 + word.chars().count() <= width => {
+                l.push(' ');
+                l.push_str(word);
+            }
+            _ => lines.push(word.to_string()),
+        }
+    }
+    lines
+}
+
+/// The `?` lines for one group, wrapped to `width`.
+fn help_group_lines(th: &Theme, g: &HelpGroup, key_w: usize, width: usize) -> Vec<Line<'static>> {
+    let p = &th.pal;
+    let title = if th.glyph.icons {
+        format!(" {} {} ", g.icon, g.title)
+    } else {
+        format!(" {} ", g.title)
+    };
+    // a pill (reverse video under NO_COLOR) so headings never rely on color alone
+    let head = if th.mono {
+        th.selected()
+    } else {
+        th.strong(p.accent).add_modifier(Modifier::UNDERLINED)
+    };
+    let mut lines = vec![Line::from(Span::styled(title, head))];
+    let desc_w = width.saturating_sub(key_w + 3).max(12);
+    for (k, d) in g.rows {
+        for (i, part) in wrap_words(d, desc_w).into_iter().enumerate() {
+            let key = if i == 0 { k.to_string() } else { String::new() };
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {key:<key_w$}  "), th.strong(p.accent)),
+                Span::styled(part, th.fg(p.fg)),
+            ]));
+        }
+    }
+    lines
+}
+
 fn render_help(f: &mut Frame, th: &Theme, area: Rect) {
     let p = &th.pal;
-    let key_w = HELP
-        .iter()
+    let key_w = help_rows()
         .map(|(k, _)| k.chars().count())
         .max()
         .unwrap_or(0);
-    let lines: Vec<Line> = HELP
+    let avail = area.width.saturating_sub(4) as usize;
+    let two = avail >= 110;
+    let col_w = if two {
+        (avail - 2) / 2
+    } else {
+        avail.clamp(30, 100)
+    };
+    let blocks: Vec<Vec<Line>> = HELP
         .iter()
-        .map(|(k, d)| {
-            Line::from(vec![
-                Span::styled(format!(" {k:<key_w$}  "), th.strong(p.accent)),
-                Span::styled(d.to_string(), th.fg(p.fg)),
-            ])
-        })
+        .map(|g| help_group_lines(th, g, key_w, col_w))
         .collect();
+    let mut lines: Vec<Line> = Vec::new();
+    if two {
+        // fill the left column until it holds about half the lines
+        let total: usize = blocks.iter().map(|b| b.len() + 1).sum();
+        let (mut left, mut right): (Vec<Line>, Vec<Line>) = (Vec::new(), Vec::new());
+        for b in blocks {
+            let col = if left.len() * 2 < total {
+                &mut left
+            } else {
+                &mut right
+            };
+            if !col.is_empty() {
+                col.push(Line::raw(""));
+            }
+            col.extend(b);
+        }
+        for i in 0..left.len().max(right.len()) {
+            let mut spans = left.get(i).map(|l| l.spans.clone()).unwrap_or_default();
+            let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+            spans.push(Span::raw(" ".repeat((col_w + 2).saturating_sub(used))));
+            if let Some(r) = right.get(i) {
+                spans.extend(r.spans.clone());
+            }
+            lines.push(Line::from(spans));
+        }
+    } else {
+        for b in blocks {
+            if !lines.is_empty() {
+                lines.push(Line::raw(""));
+            }
+            lines.extend(b);
+        }
+    }
+    lines.push(Line::raw(""));
+    let (pk, pd) = HELP_PROMPTS;
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {pk}  "), th.strong(p.accent)),
+        Span::styled(pd.to_string(), th.fg(p.dim)),
+    ]));
     let w = lines.iter().map(|l| l.width()).max().unwrap_or(40) as u16 + 3;
     let h = lines.len() as u16 + 2;
     let popup = overlay_area(f, th, area, w, h);
@@ -2098,16 +2262,46 @@ mod tests {
         for (w, h) in [(100, 30), (40, 10)] {
             draw(&a, w, h);
         }
-        let t = draw(&a, 120, 30);
-        let screen: String = (0..30).map(|y| row(&t, y)).collect::<Vec<_>>().join("\n");
+        let t = draw(&a, 120, 40);
+        let screen: String = (0..40).map(|y| row(&t, y)).collect::<Vec<_>>().join("\n");
         for k in [
             "filter",
             "install",
             "find in the output",
             "identify a hash",
             "any key to close",
+            "Navigate",
+            "Output",
+            "in prompts",
         ] {
             assert!(screen.contains(k), "help is missing {k:?}");
+        }
+        // narrow terminals fall back to one column: headings stack
+        let t = draw(&a, 80, 70);
+        let screen: String = (0..70).map(|y| row(&t, y)).collect::<Vec<_>>().join("\n");
+        assert!(
+            screen.contains("Navigate") && screen.contains("in prompts"),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn help_headings_have_icons_and_ascii_mode_has_none() {
+        let mut a = app();
+        a.show_help = true;
+        let t = draw(&a, 120, 30);
+        let screen: String = (0..30).map(|y| row(&t, y)).collect::<Vec<_>>().join("\n");
+        assert!(screen.contains("◆ Navigate"), "{screen}");
+        a.settings.glyphs = crate::theme::GlyphSet::Ascii;
+        let t = draw(&a, 120, 30);
+        let screen: String = (0..30).map(|y| row(&t, y)).collect::<Vec<_>>().join("\n");
+        assert!(screen.contains("Navigate"), "{screen}");
+        for g in HELP {
+            assert!(
+                !screen.contains(g.icon),
+                "ascii help still draws {:?}",
+                g.icon
+            );
         }
     }
 

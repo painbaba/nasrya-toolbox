@@ -23,6 +23,7 @@ use crate::banner;
 use crate::detect;
 use crate::editor::{History, LineEditor};
 use crate::envpath;
+use crate::firewall;
 use crate::hashid;
 use crate::install;
 use crate::registry::{self, Catalog, Install, Launch, Sandbox, Tool};
@@ -366,6 +367,10 @@ pub struct App {
     join_later: BTreeSet<u64>,
     /// The `L` panel (LAN guests), with its cursor.
     pub lan_panel: Option<usize>,
+    /// Port of the firewall rule winsploit added for LAN mode, while open.
+    pub fw_port: Option<u16>,
+    /// Firewall state for the `L` panel when no rule is open (why not).
+    pub fw_note: String,
     /// The last state sent to the web view (only changes are sent).
     web_state: String,
     catalog_path: PathBuf,
@@ -487,6 +492,8 @@ impl App {
             join_prompt: None,
             join_later: BTreeSet::new(),
             lan_panel: None,
+            fw_port: None,
+            fw_note: String::new(),
             web_state: String::new(),
             catalog_path,
             next_id: CONSOLE,
@@ -562,6 +569,11 @@ impl App {
 
     pub fn run(mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         self.detect_all(false);
+        // a crashed run may have left its firewall rule open
+        if let Some(port) = firewall::leftover() {
+            self.fw_port = Some(port);
+            self.fw_close("removed a leftover firewall rule from an earlier run");
+        }
         if self.start_mode == StartMode::Web {
             self.start_web(true);
         }
@@ -596,6 +608,7 @@ impl App {
             self.tick = self.tick.wrapping_add(1);
         }
         self.kill_all();
+        self.fw_close("closed the LAN firewall opening");
         // ends the session for every browser ("session ended")
         self.web = None;
         Ok(())
@@ -1891,6 +1904,13 @@ impl App {
                 }
             }
             KeyCode::Char('n') => self.apply(Action::NewKey, Source::Terminal),
+            KeyCode::Char('c') => {
+                if self.fw_port.is_some() {
+                    self.fw_close("closed the LAN firewall opening");
+                } else {
+                    self.console.push(":: firewall: no winsploit rule is open");
+                }
+            }
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('L') => self.lan_panel = None,
             _ => {}
         }
@@ -2727,6 +2747,23 @@ impl App {
                         },
                         srv.port()
                     );
+                    if srv.lan() {
+                        match firewall::open(srv.port()) {
+                            Ok(()) => {
+                                self.fw_port = Some(srv.port());
+                                self.fw_note.clear();
+                                self.console.push(format!(
+                                    ":: firewall: opened TCP {} (private) as {}; it closes                                      when LAN mode ends",
+                                    srv.port(),
+                                    firewall::rule_name(srv.port())
+                                ));
+                            }
+                            Err(e) => {
+                                self.fw_note = e.clone();
+                                self.console.push(format!(":: firewall: {e}"));
+                            }
+                        }
+                    }
                     self.web = Some(srv);
                     self.web_sent.clear();
                     self.web_logs.clear();
@@ -2765,6 +2802,7 @@ impl App {
     /// on your network (LAN), or switch a running one between the two.
     fn toggle_web(&mut self, lan: bool) {
         if let Some(was_lan) = self.web.as_ref().map(web::Server::lan) {
+            self.fw_close("closed the LAN firewall opening");
             self.web = None; // every open tab shows "session ended"
             self.web_toasts.clear();
             self.mirror_lan();
@@ -2777,6 +2815,22 @@ impl App {
         }
         self.web_lan = lan;
         self.start_web(false);
+    }
+
+    /// Remove winsploit's LAN firewall rule, if one is open. `ok` is the
+    /// console line on success. Terminal-only: never reachable from the web.
+    fn fw_close(&mut self, ok: &str) {
+        let Some(port) = self.fw_port else { return };
+        match firewall::close(port) {
+            Ok(()) => {
+                self.fw_port = None;
+                self.console.push(format!(":: firewall: {ok}"));
+            }
+            Err(e) => {
+                self.fw_note = e.clone();
+                self.console.push(format!(":: firewall: {e}"));
+            }
+        }
     }
 
     /// Catalog data the page needs once: sent when a browser connects.
@@ -3903,8 +3957,7 @@ mod tests {
                 .find(|(k, _)| *k == kind)
                 .unwrap_or_else(|| panic!("{kind}: no terminal key in Action::BINDINGS"));
             assert!(
-                ui::HELP
-                    .iter()
+                ui::help_rows()
                     .any(|(k, d)| k.split_whitespace().any(|w| w == *key) || d.contains(key)),
                 "{kind}: key {key:?} isn't listed in the ? overlay"
             );
