@@ -2740,4 +2740,156 @@ mod tests {
         // the header behind the overlay is faded
         assert!(buf[(1, 0)].modifier.contains(Modifier::DIM));
     }
+
+    // ------------------------------------------------------------ snapshots
+
+    /// A ratatui colour as CSS, for the snapshot pages (Windows Terminal's
+    /// Campbell scheme for the 16 ANSI colours).
+    fn css(c: Color, fallback: &str) -> String {
+        let named = |i: usize| {
+            [
+                "#0c0c0c", "#c50f1f", "#13a10e", "#c19c00", "#0037da", "#881798", "#3a96dd",
+                "#cccccc", "#767676", "#e74856", "#16c60c", "#f9f1a5", "#3b78ff", "#b4009e",
+                "#61d6d6", "#f2f2f2",
+            ][i]
+                .to_string()
+        };
+        match c {
+            Color::Reset => fallback.to_string(),
+            Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+            Color::Black => named(0),
+            Color::Red => named(1),
+            Color::Green => named(2),
+            Color::Yellow => named(3),
+            Color::Blue => named(4),
+            Color::Magenta => named(5),
+            Color::Cyan => named(6),
+            Color::Gray => named(7),
+            Color::DarkGray => named(8),
+            Color::LightRed => named(9),
+            Color::LightGreen => named(10),
+            Color::LightYellow => named(11),
+            Color::LightBlue => named(12),
+            Color::LightMagenta => named(13),
+            Color::LightCyan => named(14),
+            Color::White => named(15),
+            Color::Indexed(i) if i < 16 => named(i as usize),
+            _ => fallback.to_string(),
+        }
+    }
+
+    /// The test terminal as an HTML page: one span per run of same-styled
+    /// cells, in Cascadia Mono like Windows Terminal.
+    fn snapshot_html(t: &Terminal<TestBackend>, title: &str) -> String {
+        const FG: &str = "#cccccc";
+        const BG: &str = "#0c0c0c";
+        let buf = t.backend().buffer();
+        let mut out = format!(
+            "<!doctype html><meta charset=utf-8><title>{title}</title><style>\
+             body{{margin:0;background:{BG}}}\
+             pre{{margin:0;padding:8px;font:15px/18px 'Cascadia Mono','Cascadia Code',Consolas,monospace;color:{FG}}}\
+             span{{white-space:pre}}</style><pre>"
+        );
+        for y in 0..buf.area.height {
+            let mut x = 0;
+            while x < buf.area.width {
+                let c = &buf[(x, y)];
+                let (mut fg, mut bg) = (css(c.fg, FG), css(c.bg, BG));
+                if c.modifier.contains(Modifier::REVERSED) {
+                    std::mem::swap(&mut fg, &mut bg);
+                }
+                let mut style = format!("color:{fg};background:{bg}");
+                if c.modifier.contains(Modifier::BOLD) {
+                    style.push_str(";font-weight:700");
+                }
+                if c.modifier.contains(Modifier::DIM) {
+                    style.push_str(";opacity:.55");
+                }
+                if c.modifier.contains(Modifier::ITALIC) {
+                    style.push_str(";font-style:italic");
+                }
+                if c.modifier.contains(Modifier::UNDERLINED) {
+                    style.push_str(";text-decoration:underline");
+                }
+                let mut text = String::new();
+                while x < buf.area.width {
+                    let d = &buf[(x, y)];
+                    if d.fg != c.fg || d.bg != c.bg || d.modifier != c.modifier {
+                        break;
+                    }
+                    if !d.skip {
+                        text.push_str(d.symbol());
+                    }
+                    x += 1;
+                }
+                let text = text
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;");
+                out.push_str(&format!("<span style=\"{style}\">{text}</span>"));
+            }
+            out.push('\n');
+        }
+        out.push_str("</pre>");
+        out
+    }
+
+    /// Renders the main screens to HTML pages for a UX review:
+    ///   $env:WINSPLOIT_SNAP_DIR = "C:\tmp\snaps"; cargo test snapshots -- --ignored
+    /// then open (or screenshot) the pages in a browser.
+    #[test]
+    #[ignore = "writes HTML files; run by hand for screenshots"]
+    fn snapshots() {
+        use crate::app::Appearance;
+        use crate::theme::{Borders, GlyphSet, Settings, ThemeName};
+        let Some(dir) = std::env::var_os("WINSPLOIT_SNAP_DIR").map(PathBuf::from) else {
+            return;
+        };
+        std::fs::create_dir_all(&dir).unwrap();
+        let save = |name: &str, t: &Terminal<TestBackend>| {
+            std::fs::write(dir.join(format!("{name}.html")), snapshot_html(t, name)).unwrap();
+        };
+        let splash = |s: &Settings, w: u16, h: u16| {
+            let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+            t.draw(|f| crate::banner::render_splash(f, 0, &s.theme(), Some(0)))
+                .unwrap();
+            t
+        };
+        let (w, h) = (130, 38);
+        for theme in [ThemeName::Frost, ThemeName::Dark, ThemeName::DarkAnsi] {
+            let s = Settings {
+                theme,
+                ..Default::default()
+            };
+            let name = format!("{theme:?}").to_lowercase();
+            save(&format!("splash-{name}"), &splash(&s, w, h));
+            let mut a = app();
+            a.settings = s;
+            save(&format!("dashboard-{name}"), &draw(&a, w, h));
+        }
+        let ascii = Settings {
+            borders: Borders::Ascii,
+            glyphs: GlyphSet::Ascii,
+            ..Default::default()
+        };
+        save("splash-ascii", &splash(&ascii, w, h));
+        save("splash-small", &splash(&Settings::default(), 80, 24));
+        let mut a = app();
+        a.settings = ascii;
+        save("dashboard-ascii", &draw(&a, w, h));
+
+        let mut a = app();
+        save("dashboard-small", &draw(&a, 80, 24));
+        a.appearance = Some(Appearance {
+            cursor: 0,
+            saved: a.settings.clone(),
+        });
+        save("appearance", &draw(&a, w, h));
+        a.appearance = None;
+        a.show_help = true;
+        save("help", &draw(&a, w, h));
+        a.show_help = false;
+        a.tour = Some(0);
+        save("tour", &draw(&a, w, h));
+    }
 }

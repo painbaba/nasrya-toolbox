@@ -1360,7 +1360,7 @@ function renderCard() {
   rsel.hidden = recipes.length === 0 || t.launch === 'dataset';
   $('t-cmd').textContent = `$ ${t.run_cmd || t.name}`;
   $('args-wrap').hidden = t.launch === 'dataset' || (t.launch === 'web' && !t.run_cmd);
-  $('args').placeholder = (t.options || []).length ? 'arguments · type - for flags' : 'arguments';
+  $('args').placeholder = (t.options || []).length ? 'arguments · type - for flags…' : 'arguments…';
   renderExplain();
   const hint = $('args-hint');
   hint.replaceChildren();

@@ -18,6 +18,70 @@ pub const LOGO: &str = r#"
   ╚══╝╚══╝ ╚═╝╚═╝  ╚═══╝╚══════╝╚═╝     ╚══════╝ ╚═════╝ ╚═╝   ╚═╝
 "#;
 
+/// The Iso cube logo (design/README.md) rasterized from its SVG paths: one
+/// character per pixel, two pixel rows per terminal row (half blocks).
+/// `t` top face, `r` right face, `d` left (dark) face, `.` empty.
+const CUBE: [&str; 12] = [
+    ".....tt.....",
+    "...tttttt...",
+    ".tttttttttt.",
+    "dttttttttttr",
+    "dddttttttrrr",
+    "dddddttrrrrr",
+    "ddddddrrrrrr",
+    "ddddddrrrrrr",
+    "ddddddrrrrrr",
+    ".dddddrrrrr.",
+    "...dddrrr...",
+    ".....dr.....",
+];
+const CUBE_W: usize = 12;
+/// The prompt on the top face: (row, column, text), drawn as text in the
+/// theme's ink colour on the top face.
+const CUBE_PROMPT: [(usize, usize, &str); 2] = [(1, 4, ">"), (1, 5, "_")];
+
+/// The cube as one line of spans per terminal row, coloured from the theme's
+/// splash gradient (light top, accent right, dark left: exactly the logo's
+/// colours in Frost). None where it can't be drawn: no colours (NO_COLOR or
+/// an ANSI-only theme) or ASCII glyphs.
+fn cube_lines(th: &Theme) -> Option<Vec<Vec<Span<'static>>>> {
+    let stops = th.pal.gradient?;
+    if th.mono || !th.glyph.icons {
+        return None;
+    }
+    let rgb = |(r, g, b): (u8, u8, u8)| Color::Rgb(r, g, b);
+    let color = |c: u8| match c {
+        b't' => Some(rgb(stops[0])),
+        b'r' => Some(rgb(stops[1])),
+        b'd' => Some(rgb(stops[2])),
+        _ => None,
+    };
+    let lines = CUBE
+        .chunks(2)
+        .enumerate()
+        .map(|(row, pair)| {
+            let (up, down) = (pair[0].as_bytes(), pair[1].as_bytes());
+            (0..CUBE_W)
+                .map(|x| {
+                    if let Some((_, _, txt)) =
+                        CUBE_PROMPT.iter().find(|(r, c, _)| *r == row && *c == x)
+                    {
+                        let bg = color(up[x]).unwrap_or(Color::Reset);
+                        return Span::styled(*txt, th.strong(th.pal.ink).bg(bg));
+                    }
+                    match (color(up[x]), color(down[x])) {
+                        (None, None) => Span::raw(" "),
+                        (Some(u), None) => Span::styled("▀", Style::default().fg(u)),
+                        (None, Some(d)) => Span::styled("▄", Style::default().fg(d)),
+                        (Some(u), Some(d)) => Span::styled("▀", Style::default().fg(u).bg(d)),
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    Some(lines)
+}
+
 /// Linear interpolation between two bytes.
 fn lerp(a: u8, b: u8, t: f32) -> u8 {
     let t = t.clamp(0.0, 1.0);
@@ -95,6 +159,14 @@ pub fn render_splash(f: &mut Frame, tick: u64, th: &Theme, menu: Option<usize>) 
         ])
         .split(inner);
 
+    // The Iso cube left of the wordmark, when it fits and can be drawn.
+    let word_w = logo_lines
+        .iter()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(0);
+    let cube = cube_lines(th).filter(|_| inner.width as usize >= word_w + CUBE_W + 4);
+
     // A scanning glow sweeps down the logo, line by line.
     let n = logo_lines.len().max(1);
     let glow_idx = (tick / 2) % n as u64;
@@ -102,6 +174,8 @@ pub fn render_splash(f: &mut Frame, tick: u64, th: &Theme, menu: Option<usize>) 
         .iter()
         .enumerate()
         .map(|(i, l)| {
+            // pad every line to the same width so the block stays aligned
+            let l = format!("{l:<word_w$}");
             let t = if n > 1 {
                 i as f32 / (n as f32 - 1.0)
             } else {
@@ -117,7 +191,17 @@ pub fn render_splash(f: &mut Frame, tick: u64, th: &Theme, menu: Option<usize>) 
                 }
                 None => p.accent,
             };
-            Line::from(Span::styled(l.to_string(), th.strong(fg))).alignment(Alignment::Center)
+            let word = Span::styled(l, th.strong(fg));
+            match &cube {
+                Some(c) => {
+                    let mut spans = c.get(i).cloned().unwrap_or_default();
+                    spans.push(Span::raw("   "));
+                    spans.push(word);
+                    Line::from(spans)
+                }
+                None => Line::from(word),
+            }
+            .alignment(Alignment::Center)
         })
         .collect();
     f.render_widget(Paragraph::new(logo), rows[1]);
@@ -246,4 +330,45 @@ pub fn wordmark(th: &Theme, challenge: Option<(String, String)>) -> Line<'static
         Span::styled("  ·  ", th.fg(p.dim)),
         Span::styled("command runner", th.fg(p.dim)),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::{GlyphSet, Settings, ThemeName};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn splash(s: &Settings, w: u16, h: u16) -> String {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| render_splash(f, 0, &s.theme(), Some(0)))
+            .unwrap();
+        let buf = t.backend().buffer();
+        (0..h)
+            .map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn cube_sits_beside_the_wordmark_when_it_can() {
+        let frost = Settings::default();
+        let s = splash(&frost, 130, 38);
+        assert!(s.contains('▀') && s.contains("▀▀▀"), "no cube:\n{s}");
+        // the cube's pixel rows always come in pairs
+        assert_eq!(CUBE.len() % 2, 0);
+        assert!(CUBE.iter().all(|r| r.len() == CUBE_W));
+        // too narrow, ASCII glyphs or an ANSI-only theme: wordmark only
+        assert!(!splash(&frost, 80, 24).contains('▀'));
+        let ascii = Settings {
+            glyphs: GlyphSet::Ascii,
+            ..Default::default()
+        };
+        assert!(cube_lines(&ascii.theme()).is_none());
+        let ansi = Settings {
+            theme: ThemeName::DarkAnsi,
+            ..Default::default()
+        };
+        assert!(cube_lines(&ansi.theme()).is_none());
+    }
 }
