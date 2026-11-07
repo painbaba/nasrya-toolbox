@@ -85,10 +85,13 @@ cargo build --release
 .\target\release\nasrya
 ```
 
-Some tools (nuclei, ffuf, …) live in a Scoop *security bucket*. Add one before installing those:
+Some tools live outside Scoop's main bucket. Add these buckets before installing them:
 
 ```powershell
-scoop bucket add security https://github.com/whoopscs/scoop-security
+# nuclei, httpx, subfinder, katana, …
+scoop bucket add security https://github.com/opsqw/scoop-security
+# Sysinternals (strings), …
+scoop bucket add extras
 ```
 
 ## Usage
