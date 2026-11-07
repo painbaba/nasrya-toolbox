@@ -133,3 +133,11 @@ tools:
     scoop: openssl
     run_cmd: openssl
     args_hint: "version -a"
+
+  - name: exiftool
+    category: forensics
+    description: Read / write file metadata
+    exe: exiftool
+    scoop: exiftool
+    run_cmd: exiftool
+    args_hint: "image.jpg"
