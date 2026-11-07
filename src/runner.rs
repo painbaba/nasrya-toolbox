@@ -4,6 +4,7 @@
 //! grandchildren, so a plain child.kill() is not enough on Windows).
 
 use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::thread;
@@ -22,7 +23,7 @@ pub fn spawn_streaming(
     args: &[String],
     tx: Sender<AppEvent>,
 ) -> std::io::Result<u32> {
-    let mut child = Command::new(program)
+    let mut child = Command::new(resolve_program(program))
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -73,6 +74,43 @@ pub fn spawn_streaming(
     });
 
     Ok(pid)
+}
+
+/// Resolve a bare command name to the file Windows would actually run.
+///
+/// `Command::new("jadx")` only finds `jadx.exe`; it never tries `.cmd`/`.bat`,
+/// and many Scoop shims (jadx, apktool, Python/Java wrappers) are exactly that.
+/// So we ask `where.exe` and take the first hit with a runnable extension.
+/// `where` also lists extensionless shell-script shims (e.g. `jadx` next to
+/// `jadx.cmd`), which Windows cannot execute, so those are skipped.
+/// `$PATH:` limits the search to PATH, so a same-named file in the current
+/// directory is never picked up. Explicit paths and names that already carry
+/// an extension are passed through untouched. std's `Command` runs a resolved
+/// `.bat`/`.cmd` through cmd.exe with safe argument escaping.
+fn resolve_program(program: &str) -> PathBuf {
+    let given = Path::new(program);
+    if given.extension().is_some() || given.components().count() > 1 {
+        return given.to_path_buf();
+    }
+    let found = Command::new("where.exe")
+        .arg(format!("$PATH:{program}"))
+        .stderr(Stdio::null())
+        .output();
+    if let Ok(out) = found {
+        if out.status.success() {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                let cand = Path::new(line.trim());
+                let ext = cand
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_ascii_lowercase());
+                if matches!(ext.as_deref(), Some("exe" | "com" | "bat" | "cmd")) {
+                    return cand.to_path_buf();
+                }
+            }
+        }
+    }
+    given.to_path_buf()
 }
 
 /// Kill a process and its whole tree (taskkill /T). Best-effort.
