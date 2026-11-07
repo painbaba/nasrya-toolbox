@@ -82,3 +82,12 @@ tools:
     scoop: feroxbuster
     run_cmd: feroxbuster
     args_hint: "-u https://example.com"
+
+  - name: httpx
+    category: recon
+    description: ProjectDiscovery HTTP prober (not the Python httpx CLI)
+    exe: httpx
+    scoop: httpx
+    run_cmd: httpx
+    args_hint: "-u https://example.com -title -status-code"
+    bucket: security
