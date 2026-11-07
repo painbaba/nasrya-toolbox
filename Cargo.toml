@@ -1,13 +1,13 @@
 [package]
-name = "kali-tools-for-win"
+name = "nasrya"
 version = "0.1.0"
 edition = "2021"
 description = "Native-Windows security toolbox: a TUI launcher that detects, installs (via Scoop) and runs pentest tools."
 license = "MIT"
-
-[[bin]]
-name = "nasrya"
-path = "src/main.rs"
+repository = "https://github.com/tahabenissa/nasrya-toolbox"
+readme = "README.md"
+keywords = ["security", "pentest", "windows", "tui", "scoop"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 ratatui = "0.29"
