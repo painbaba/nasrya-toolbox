@@ -244,3 +244,13 @@ tools:
     pipx: hashid
     run_cmd: hashid
     args_hint: "-m 5f4dcc3b5aa765d61d8327deb882cf99"
+
+  - name: netexec
+    category: passwords
+    description: Network service auth / enumeration (nxc)
+    exe: nxc
+    install: pipx
+    pipx: git+https://github.com/Pennyw0rth/NetExec
+    run_cmd: nxc
+    args_hint: "smb 192.168.1.0/24"
+    note: needs Python 3.11+; SMB/LDAP/WinRM work on Windows, some other protocols are degraded
