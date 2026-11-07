@@ -20,6 +20,8 @@ cargo test                                    # all unit tests
 cargo test ui::tests::categories_get_their_own_row   # one test (substring of the path works too)
 cargo fmt --all
 cargo clippy --all-targets -- -D warnings     # kept clean, though CI only runs clippy/fmt as advisory
+$env:WINSPLOIT_SNAP_DIR = "C:\tmp\snaps"; cargo test snapshots -- --ignored   # TUI screens as HTML pages, for screenshots
+node site/scripts/app-icon.mjs                # regenerate assets/winsploit.ico (embedded by build.rs)
 ```
 
 CI (`.github/workflows/ci.yml`, windows-latest) hard-gates only on `cargo build --release` plus a smoke
@@ -113,6 +115,12 @@ app.js) is embedded with `include_str!`, so rebuild after editing it.
 
 ## Repo conventions
 
+- **Find a skill before a new process or feature.** Before starting a new kind of work (a new
+  feature, an audit, a review, a release step…), run `/find-skills` to look for a skill that fits
+  the workflow, unless one is already installed for it. Check it the way find-skills says
+  (install count, source, and read its `SKILL.md` before installing), install it
+  (`npx skills add <owner/repo> --skill <name> -g -a claude-code -y --copy`), then run it for the
+  task. If nothing fits, say so and carry on without one.
 - **Pull before you change anything.** Several people push straight to `main`, so at the start of
   every task, before reading code to plan an edit, run `git pull --rebase origin main`, and read
   `git log --oneline -5` to see what landed. If the working tree has uncommitted changes, don't
