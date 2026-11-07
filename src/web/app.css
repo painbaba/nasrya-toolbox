@@ -201,9 +201,12 @@ kbd {
   border-bottom: 1px solid var(--border);
 }
 .brand { display: flex; align-items: center; gap: 10px; margin-right: 4px; }
-.challenge-pick { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* the picker shrinks with the bar (a select keeps its own width otherwise and
+   ends up under the items next to it) */
+.challenge-pick { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; }
+.topbar > :not(.challenge-pick):not(.spacer) { flex-shrink: 0; white-space: nowrap; }
 .challenge-pick select {
-  height: 32px; max-width: 240px; padding: 0 8px;
+  height: 32px; width: 240px; max-width: 100%; min-width: 0; padding: 0 8px; text-overflow: ellipsis;
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
   background: var(--bg); color: inherit; font: inherit; font-size: 0.9286rem;
 }
