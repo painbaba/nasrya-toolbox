@@ -1,12 +1,13 @@
 /* Winsploit web view. Light and dark follow the OS unless the theme button
    picks one. Colors come from a handful of palette numbers that app.js sets
-   on :root (Settings > Colors); these defaults are the classic terracotta:
+   on :root (the palette button, or Settings > Colors); these defaults are
+   Frost, the default palette:
      --h --s     surface hue and tint        --ah --as   accent hue, saturation
      --al --ll   accent lightness, dark/light --lift     raises dark surfaces
      --ink-l     text on the accent in light mode (0% for very light accents) */
 
 :root {
-  --h: 25; --s: 10%; --ah: 15; --as: 62%; --al: 62%; --ll: 50%; --lift: 0%; --ink-l: 100%;
+  --h: 220; --s: 17%; --ah: 193; --as: 45%; --al: 68%; --ll: 38%; --lift: 13%; --ink-l: 100%;
 
   --bg: hsl(var(--h) calc(var(--s) * .9) 96%);
   --panel: hsl(var(--h) calc(var(--s) * .6) 99.3%);
@@ -950,7 +951,29 @@ input.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2
   border: 1px solid rgba(127, 127, 127, .3);
 }
 .swatch .sw i { position: absolute; inset: 0; }
-.swatch .sw i + i { inset: auto 6px 6px auto; width: 12px; height: 12px; border-radius: 50%; }
+.swatch .sw i.pn { inset: 5px auto 5px 5px; width: 13px; border-radius: 3px; }
+.swatch .sw i.ac { inset: auto 6px 6px auto; width: 12px; height: 12px; border-radius: 50%; }
+
+/* the top bar's colors menu (p) */
+#open-looks .dots { fill: currentColor; stroke: none; }
+#open-looks[aria-expanded="true"] { color: var(--accent); background: var(--hover); }
+.looks {
+  position: fixed; z-index: 35; width: min(440px, calc(100vw - 16px));
+  padding: 14px; border: 1px solid var(--border-strong); border-radius: 12px;
+  background: var(--panel); box-shadow: var(--shadow-lg); animation: rise .14s ease-out;
+}
+.looks-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.looks-head b { font-size: 14px; }
+.looks-head small { display: block; color: var(--muted); font-size: 12px; font-weight: 500; }
+.looks-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
+.looks-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border);
+}
+.looks-foot label { display: inline-flex; align-items: center; gap: 9px; font-size: 13px; color: var(--muted); cursor: pointer; }
+.looks-foot input.switch { width: 32px; height: 18px; }
+.looks-foot input.switch::after { width: 12px; height: 12px; }
+.looks-foot input.switch:checked::after { transform: translateX(14px); }
 
 /* -------------------------------------------------------------- narrow */
 
