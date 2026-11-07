@@ -264,3 +264,12 @@ tools:
     run_cmd: RsaCtfTool
     args_hint: "--publickey key.pub --private"
     note: gmpy2 may need a C toolchain to build on Windows if no wheel matches your Python
+
+  - name: volatility3
+    category: forensics
+    description: Memory-dump forensics framework
+    exe: vol
+    install: pipx
+    pipx: volatility3
+    run_cmd: vol
+    args_hint: "-f memory.dmp windows.info"
