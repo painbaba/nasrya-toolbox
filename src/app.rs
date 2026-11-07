@@ -37,6 +37,8 @@ pub enum Mode {
     Input,
     /// typing a hash for the built-in identifier
     HashInput,
+    /// typing a line for the running process's stdin
+    StdinInput,
 }
 
 #[derive(PartialEq, Eq)]
@@ -58,6 +60,8 @@ pub struct App {
     history: History,
     pub running: bool,
     pub running_pid: Option<u32>,
+    /// stdin of the running tool (None for installs, or after Ctrl+D)
+    proc_stdin: Option<std::process::ChildStdin>,
     pub status_line: String,
     pub tick: u64,
     /// A background detection pass is in flight.
@@ -99,6 +103,7 @@ impl App {
             history: History::default(),
             running: false,
             running_pid: None,
+            proc_stdin: None,
             status_line: "detecting tools…".into(),
             tick: 0,
             detecting: false,
@@ -208,6 +213,11 @@ impl App {
             AppEvent::Exited(code) => {
                 self.running = false;
                 self.running_pid = None;
+                self.proc_stdin = None;
+                if self.mode == Mode::StdinInput {
+                    self.mode = Mode::Browsing;
+                    self.editor.set("");
+                }
                 match code {
                     Some(c) => self.push(format!("── process exited (code {c}) ──")),
                     None => self.push("── process ended ──".to_string()),
@@ -225,7 +235,7 @@ impl App {
     fn on_key(&mut self, key: KeyEvent) {
         match self.mode {
             Mode::Browsing => self.on_key_browsing(key.code),
-            Mode::Input | Mode::HashInput => self.on_key_input(key),
+            Mode::Input | Mode::HashInput | Mode::StdinInput => self.on_key_input(key),
         }
     }
 
@@ -233,6 +243,8 @@ impl App {
     fn history_key(&self) -> String {
         if self.mode == Mode::HashInput {
             "\u{0}hashid".to_string()
+        } else if self.mode == Mode::StdinInput {
+            "\u{0}stdin".to_string()
         } else {
             self.tools[self.selected].name.clone()
         }
@@ -264,7 +276,15 @@ impl App {
                     // nothing to run, so no args prompt
                     self.show_dataset();
                 } else if self.running {
-                    self.status_line = "a process is already running (press c to cancel)".into();
+                    if self.proc_stdin.is_some() {
+                        // talk to the running tool (answer a prompt, etc.)
+                        self.editor.set("");
+                        self.history.reset();
+                        self.mode = Mode::StdinInput;
+                    } else {
+                        self.status_line =
+                            "a process is already running (press c to cancel)".into();
+                    }
                 } else {
                     let hint = self.tools[self.selected].args_hint.clone();
                     self.editor.set(&hint.unwrap_or_default());
@@ -291,10 +311,10 @@ impl App {
                 let hkey = self.history_key();
                 self.history.push(&hkey, &text);
                 let mode = std::mem::replace(&mut self.mode, Mode::Browsing);
-                if mode == Mode::HashInput {
-                    self.identify_hash(&text);
-                } else {
-                    self.launch(&text);
+                match mode {
+                    Mode::HashInput => self.identify_hash(&text),
+                    Mode::StdinInput => self.send_stdin(&text),
+                    _ => self.launch(&text),
                 }
             }
             KeyCode::Up => {
@@ -319,6 +339,13 @@ impl App {
             KeyCode::Backspace if ctrl => e.delete_word_left(),
             KeyCode::Backspace => e.backspace(),
             KeyCode::Delete => e.delete(),
+            KeyCode::Char('d') if ctrl && self.mode == Mode::StdinInput => {
+                // end-of-input: close the pipe so the tool sees EOF
+                self.proc_stdin = None;
+                self.mode = Mode::Browsing;
+                self.editor.set("");
+                self.push(":: closed the tool's input (EOF)");
+            }
             KeyCode::Char('u') if ctrl => e.clear_to_start(),
             KeyCode::Char('w') if ctrl => e.delete_word_left(),
             KeyCode::Char('a') if ctrl => e.home(),
@@ -327,6 +354,26 @@ impl App {
             KeyCode::Char(_) if ctrl || alt => {}
             KeyCode::Char(c) => e.insert(c),
             _ => {}
+        }
+    }
+
+    /// Send one line to the running tool's stdin (echoed in the pane).
+    fn send_stdin(&mut self, line: &str) {
+        use std::io::Write;
+        let Some(stdin) = self.proc_stdin.as_mut() else {
+            self.push("[err] the tool's input is closed");
+            return;
+        };
+        let res = stdin
+            .write_all(line.as_bytes())
+            .and_then(|_| stdin.write_all(b"\n"))
+            .and_then(|_| stdin.flush());
+        match res {
+            Ok(()) => self.push(format!("> {line}")),
+            Err(e) => {
+                self.proc_stdin = None;
+                self.push(format!("[err] couldn't send input: {e}"));
+            }
         }
     }
 
@@ -476,8 +523,10 @@ impl App {
     /// started.
     fn start_streaming(&mut self, name: &str, cmd: &str, args: &[String]) -> bool {
         self.push(format!("$ {} {}", cmd, args::join(args)));
-        match runner::spawn_streaming(runner::tool_command(cmd, args), self.tx.clone()) {
-            Ok(pid) => {
+        match runner::spawn_streaming(runner::tool_command(cmd, args), self.tx.clone(), true) {
+            Ok(sp) => {
+                let pid = sp.pid;
+                self.proc_stdin = sp.stdin;
                 self.running = true;
                 self.running_pid = Some(pid);
                 self.status_line = format!("running {name} (pid {pid})");
@@ -553,10 +602,10 @@ impl App {
             use std::os::windows::process::CommandExt;
             cmd.raw_arg(format!("/D /C {line}"));
         }
-        match runner::spawn_streaming(cmd, self.tx.clone()) {
-            Ok(pid) => {
+        match runner::spawn_streaming(cmd, self.tx.clone(), false) {
+            Ok(sp) => {
                 self.running = true;
-                self.running_pid = Some(pid);
+                self.running_pid = Some(sp.pid);
                 self.installing = true;
                 self.status_line = format!("installing {name}…");
             }
@@ -565,6 +614,7 @@ impl App {
     }
 
     fn cancel(&mut self) {
+        self.proc_stdin = None;
         if let Some(pid) = self.running_pid {
             runner::kill_tree(pid);
             self.push(format!("sent kill to pid {pid}"));

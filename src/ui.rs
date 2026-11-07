@@ -202,6 +202,8 @@ fn render_output(f: &mut Frame, app: &App, area: Rect) {
 fn style_output_line(l: &str) -> Span<'static> {
     if l.starts_with("[err]") {
         Span::styled(l.to_string(), Style::default().fg(RED))
+    } else if l.starts_with("> ") {
+        Span::styled(l.to_string(), Style::default().fg(CYAN))
     } else if l.starts_with("$ ") {
         Span::styled(
             l.to_string(),
@@ -219,11 +221,11 @@ fn style_output_line(l: &str) -> Span<'static> {
 
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     let content = match app.mode {
-        Mode::Input | Mode::HashInput => {
-            let (label, help) = if app.mode == Mode::HashInput {
-                (" hash ▸ ", "  Enter identify · Esc cancel")
-            } else {
-                (" args ▸ ", "  Enter run · ↑↓ history · Esc cancel")
+        Mode::Input | Mode::HashInput | Mode::StdinInput => {
+            let (label, help) = match app.mode {
+                Mode::HashInput => (" hash ▸ ", "  Enter identify · Esc cancel"),
+                Mode::StdinInput => (" stdin ▸ ", "  Enter send · Ctrl+D end input · Esc close"),
+                _ => (" args ▸ ", "  Enter run · ↑↓ history · Esc cancel"),
             };
             let label_w = label.chars().count() as u16 + 1; // + the space after it
                                                             // Drop the help text when space is tight; the line itself matters more.

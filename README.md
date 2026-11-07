@@ -120,7 +120,7 @@ pass `--catalog .\tools.yaml` to use it on purpose. The active path is shown in 
 | Key | Action |
 |---|---|
 | `↑ / ↓` | move selection |
-| `Enter` | run the selected tool (edit the prefilled args, then Enter) |
+| `Enter` | run the selected tool (edit the prefilled args, then Enter). While a tool is running: type a line to send to its input (`Ctrl+D` = end of input) |
 | `i` | install the selected tool (Scoop or pipx) |
 | `r` | re-detect what's installed |
 | `c` | cancel the running process |

@@ -5,7 +5,7 @@
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{ChildStdin, Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::thread;
 
@@ -29,11 +29,36 @@ pub fn tool_command(program: &str, args: &[String]) -> Command {
     cmd
 }
 
-/// Spawn `cmd`, streaming its output to `tx`. Returns the child PID.
-pub fn spawn_streaming(mut cmd: Command, tx: Sender<AppEvent>) -> std::io::Result<u32> {
-    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+/// A started streaming process.
+pub struct Spawned {
+    pub pid: u32,
+    /// Write end of the child's stdin (when it was asked for).
+    pub stdin: Option<ChildStdin>,
+}
+
+/// Spawn `cmd`, streaming its output to `tx`.
+///
+/// The child never shares nasrya's console input: with `with_stdin` it gets
+/// a pipe the UI can type into, otherwise stdin is closed. (Inheriting the
+/// console made a prompting tool race the dashboard for keystrokes.)
+pub fn spawn_streaming(
+    mut cmd: Command,
+    tx: Sender<AppEvent>,
+    with_stdin: bool,
+) -> std::io::Result<Spawned> {
+    let stdin = if with_stdin {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    };
+    let mut child = cmd
+        .stdin(stdin)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
 
     let pid = child.id();
+    let stdin = child.stdin.take();
 
     let mut readers = Vec::new();
     if let Some(out) = child.stdout.take() {
@@ -57,7 +82,7 @@ pub fn spawn_streaming(mut cmd: Command, tx: Sender<AppEvent>) -> std::io::Resul
         let _ = tx.send(AppEvent::Exited(code));
     });
 
-    Ok(pid)
+    Ok(Spawned { pid, stdin })
 }
 
 /// Forward every line from `src` to the UI until EOF.
@@ -228,6 +253,36 @@ pub fn kill_tree(pid: u32) {
 mod tests {
     use super::clean_line;
 
+    /// Input typed in the UI reaches the tool, and dropping the pipe is EOF:
+    /// `sort` only prints once its input ends.
+    #[test]
+    fn stdin_pipe_and_eof() {
+        use super::{spawn_streaming, AppEvent};
+        use std::io::Write;
+        use std::time::Duration;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/D", "/C", "sort"]);
+        let mut sp = spawn_streaming(cmd, tx, true).unwrap();
+        let mut stdin = sp.stdin.take().expect("piped stdin");
+        stdin.write_all(b"pear\napple\n").unwrap();
+        drop(stdin); // EOF
+
+        let mut lines = Vec::new();
+        loop {
+            match rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("runner stalled")
+            {
+                AppEvent::Output(l) => lines.push(l),
+                AppEvent::Exited(_) => break,
+                AppEvent::Detected(_) => {}
+            }
+        }
+        assert_eq!(lines, ["apple", "pear"]);
+    }
+
     /// Through the real spawn path: a non-UTF-8 line must not stop the
     /// stream, and Exited must come after the last line.
     #[test]
@@ -243,7 +298,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut cmd = std::process::Command::new("cmd");
         cmd.args(["/D", "/C", "type"]).arg(&file);
-        spawn_streaming(cmd, tx).unwrap();
+        spawn_streaming(cmd, tx, false).unwrap();
 
         let mut lines = Vec::new();
         loop {
