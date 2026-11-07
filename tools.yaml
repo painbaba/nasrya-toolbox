@@ -117,3 +117,11 @@ tools:
     run_cmd: katana
     args_hint: "-u https://example.com"
     bucket: security
+
+  - name: rustscan
+    category: recon
+    description: Ultra-fast port scanner that feeds nmap
+    exe: rustscan
+    scoop: rustscan
+    run_cmd: rustscan
+    args_hint: "-a 127.0.0.1 -- -sV"
