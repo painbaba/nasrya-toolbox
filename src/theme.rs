@@ -93,7 +93,7 @@ pub enum Backdrop {
     None,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct Settings {
     pub theme: ThemeName,
@@ -104,6 +104,11 @@ pub struct Settings {
     pub backdrop: Backdrop,
     /// the first-run welcome tour was finished or skipped
     pub tour_done: bool,
+    /// Which AI the `a` agent talks to.
+    pub agent: crate::agent::Provider,
+    /// Per-provider model overrides, keyed by `Provider::short()`. An entry
+    /// here replaces that provider's default model; absent = use the default.
+    pub agent_models: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for Settings {
@@ -116,6 +121,8 @@ impl Default for Settings {
             overlay: OverlayPos::default(),
             backdrop: Backdrop::default(),
             tour_done: false,
+            agent: crate::agent::Provider::default(),
+            agent_models: std::collections::BTreeMap::new(),
         }
     }
 }

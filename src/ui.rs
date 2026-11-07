@@ -4,10 +4,12 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::{App, Appearance, CatTab, Mode, ToastKind, ToolStatus, TOUR_STEPS};
+use crate::app::{
+    AgentView, App, Appearance, CatTab, Mode, ProviderPick, ToastKind, ToolStatus, TOUR_STEPS,
+};
 use crate::banner;
 use crate::registry::{self, Launch, Sandbox};
 use crate::session::{RunState, Session, SLOTS};
@@ -59,6 +61,10 @@ pub fn render(f: &mut Frame, app: &App) {
     render_toasts(f, app, &th, chunks[2]);
     if let Some(ap) = &app.appearance {
         render_appearance(f, app, ap, &th, area);
+    } else if let Some(pick) = &app.provider_pick {
+        render_provider_picker(f, app, pick, &th, area);
+    } else if let Some(ag) = &app.agent {
+        render_agent(f, ag, &th, area);
     } else if app.show_help {
         render_help(f, &th, area);
     }
@@ -102,6 +108,8 @@ pub const HELP: &[(&str, &str)] = &[
     ("PgUp PgDn", "scroll the terminal · Home top · End follow"),
     ("f  n  N", "find in the output · older / newer match"),
     ("h", "identify a hash (built in)"),
+    ("a", "agent: AI reads the output and suggests next steps"),
+    ("A", "choose the agent's AI (claude / gemini / deepseek / openai / ollama)"),
     ("t", "appearance: theme, borders, glyphs, overlays"),
     (
         "w  W",
@@ -211,6 +219,141 @@ fn render_help(f: &mut Frame, th: &Theme, area: Rect) {
     let popup = overlay_area(f, th, area, w, h);
     f.render_widget(
         Paragraph::new(lines).block(overlay_block(th, "keys", "any key to close")),
+        popup,
+    );
+}
+
+/// The agent-provider picker (`A`): choose which AI the `a` key talks to, and
+/// set a model override per provider (`m` edits, `r` resets to default).
+fn render_provider_picker(f: &mut Frame, app: &App, pick: &ProviderPick, th: &Theme, area: Rect) {
+    let p = &th.pal;
+    let current = app.settings.agent;
+    let label_w = crate::agent::Provider::ALL
+        .iter()
+        .map(|x| x.label().chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let mut lines: Vec<Line> = vec![Line::raw("")];
+    for (i, prov) in crate::agent::Provider::ALL.iter().enumerate() {
+        let sel = i == pick.cursor;
+        let is_current = *prov == current;
+        let marker = if sel { "›" } else { " " };
+        let dot = if is_current { "●" } else { " " };
+        let ready = matches!(prov.availability(), crate::agent::Availability::Ready);
+        let note_color = if ready { p.ok } else { p.dim };
+        let name_style = if sel {
+            th.strong(p.accent)
+        } else if is_current {
+            th.fg(p.fg)
+        } else {
+            th.fg(p.dim)
+        };
+        let model = app.effective_model(*prov);
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {marker} "), th.strong(p.accent)),
+            Span::styled(format!("{dot} "), th.fg(p.accent)),
+            Span::styled(format!("{:<label_w$}  ", prov.label()), name_style),
+            Span::styled(prov.status_note(), th.fg(note_color)),
+        ]));
+        // model line under each provider
+        if sel && pick.editing.is_some() {
+            let ed = pick.editing.as_ref().unwrap();
+            lines.push(Line::from(vec![
+                Span::styled("      model: ", th.fg(p.dim)),
+                Span::styled(ed.text().to_string(), th.strong(p.accent)),
+                Span::styled("▏", th.strong(p.accent)),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled("      model: ", th.fg(p.dim)),
+                Span::styled(model, th.fg(if sel { p.fg } else { p.dim })),
+            ]));
+        }
+    }
+    lines.push(Line::raw(""));
+    let hint = if pick.editing.is_some() {
+        "  type the model · Enter save · Esc cancel · empty = default"
+    } else {
+        "  ● current · m edit model · r reset · Claude uses its CLI login, the rest read an API key"
+    };
+    lines.push(Line::from(Span::styled(hint, th.fg(p.dim))));
+
+    let w = (lines.iter().map(|l| l.width()).max().unwrap_or(40) as u16 + 4).min(area.width);
+    let h = (lines.len() as u16 + 2).min(area.height);
+    let popup = overlay_area(f, th, area, w, h);
+    let bottom = if pick.editing.is_some() {
+        "Enter save · Esc cancel"
+    } else {
+        "↑↓ · Enter choose · m model · Esc"
+    };
+    f.render_widget(
+        Paragraph::new(lines).block(overlay_block(th, "agent provider", bottom)),
+        popup,
+    );
+}
+
+/// The agent overlay (`a`): the AI's summary, findings, and a cursor over the
+/// suggested next steps.
+fn render_agent(f: &mut Frame, ag: &AgentView, th: &Theme, area: Rect) {
+    let p = &th.pal;
+    let a = &ag.analysis;
+    let mut lines: Vec<Line> = Vec::new();
+
+    if a.summary.trim().is_empty() {
+        lines.push(Line::from(Span::styled("(no summary)", th.fg(p.dim))));
+    } else {
+        lines.push(Line::from(Span::styled(a.summary.clone(), th.fg(p.fg))));
+    }
+
+    if !a.findings.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled("findings", th.strong(p.dim))));
+        for fdg in &a.findings {
+            lines.push(Line::from(vec![
+                Span::styled(" • ", th.fg(p.accent)),
+                Span::styled(fdg.clone(), th.fg(p.fg)),
+            ]));
+        }
+    }
+
+    lines.push(Line::raw(""));
+    if a.suggestions.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "no tool suggestions — press Esc to close",
+            th.fg(p.dim),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled("suggested next steps", th.strong(p.accent))));
+        for (i, s) in a.suggestions.iter().enumerate() {
+            let sel = i == ag.cursor;
+            let name_style = if sel {
+                th.strong(p.accent)
+            } else {
+                th.fg(p.fg)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(if sel { " › " } else { "   " }, th.strong(p.accent)),
+                Span::styled(format!("{} ", s.tool), name_style),
+                Span::styled(s.args.clone(), th.fg(p.dim)),
+            ]));
+            if !s.rationale.trim().is_empty() {
+                lines.push(Line::from(vec![
+                    Span::raw("     "),
+                    Span::styled(s.rationale.clone(), th.fg(p.dim)),
+                ]));
+            }
+        }
+    }
+
+    let w = 78.min(area.width);
+    // wrapping can grow lines, so leave headroom rather than clip tightly
+    let h = (lines.len() as u16 + 6).min(area.height);
+    let popup = overlay_area(f, th, area, w, h);
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: true })
+            .block(overlay_block(th, "agent", "↑↓ pick · Enter run · Esc close")),
         popup,
     );
 }
@@ -387,10 +530,29 @@ fn render_header(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         .map_or(0, |(t, _)| t.chars().count() as u16 + 4);
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(10), Constraint::Length(52 + web_w)])
+        .constraints([
+            Constraint::Min(10),
+            Constraint::Length(10),          // agent icon
+            Constraint::Length(52 + web_w),  // install stats (+ web indicator)
+        ])
         .split(area);
 
     f.render_widget(Paragraph::new(banner::wordmark(th)), cols[0]);
+
+    // Clickable agent icon: a filled chip, a braille spinner while it works.
+    const SPIN: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    let mark = if app.agent_busy {
+        SPIN[(app.tick as usize / 2) % SPIN.len()]
+    } else {
+        '✦'
+    };
+    let chip = Line::from(Span::styled(
+        format!(" {mark} agent "),
+        th.strong(p.accent).add_modifier(Modifier::REVERSED),
+    ))
+    .alignment(Alignment::Right);
+    f.render_widget(Paragraph::new(chip), cols[1]);
+    app.agent_icon.set(Some(cols[1]));
 
     let count = |st: ToolStatus| app.status.iter().filter(|s| **s == st).count();
     let installed = count(ToolStatus::Installed);
@@ -423,7 +585,7 @@ fn render_header(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         Span::styled(format!("· {} tools ", app.tools.len()), th.fg(p.dim)),
     ]);
     let stats = Line::from(stats).alignment(Alignment::Right);
-    f.render_widget(Paragraph::new(stats), cols[1]);
+    f.render_widget(Paragraph::new(stats), cols[2]);
 }
 
 /// The monochrome symbol in front of a category chip (unicode glyph set
@@ -1278,6 +1440,51 @@ mod tests {
     }
 
     #[test]
+    fn provider_picker_lists_every_ai() {
+        let mut a = app();
+        a.provider_pick = Some(ProviderPick {
+            cursor: 0,
+            editing: None,
+        });
+        for (w, h) in [(40, 10), (10, 4)] {
+            draw(&a, w, h);
+        }
+        let t = draw(&a, 120, 30);
+        let screen: String = (0..30).map(|y| row(&t, y)).collect::<Vec<_>>().join("\n");
+        for k in [
+            "Claude", "Gemini", "DeepSeek", "OpenAI", "Ollama", "model:", "sonnet",
+        ] {
+            assert!(screen.contains(k), "provider picker is missing {k:?}");
+        }
+    }
+
+    #[test]
+    fn agent_overlay_shows_summary_and_suggestions() {
+        let mut a = app();
+        a.agent = Some(crate::app::AgentView {
+            analysis: crate::agent::Analysis {
+                summary: "two services exposed".into(),
+                findings: vec!["ssh open".into()],
+                suggestions: vec![crate::agent::Suggestion {
+                    tool: "nuclei".into(),
+                    args: "-u http://t".into(),
+                    rationale: "scan the web port".into(),
+                }],
+            },
+            cursor: 0,
+        });
+        // tiny sizes must not panic either
+        for (w, h) in [(40, 10), (10, 4)] {
+            draw(&a, w, h);
+        }
+        let t = draw(&a, 120, 30);
+        let screen: String = (0..30).map(|y| row(&t, y)).collect::<Vec<_>>().join("\n");
+        for k in ["two services exposed", "ssh open", "nuclei", "Enter run"] {
+            assert!(screen.contains(k), "agent overlay is missing {k:?}");
+        }
+    }
+
+    #[test]
     fn args_prompt_shows_text_and_places_cursor() {
         let mut a = app();
         a.mode = Mode::Input;
@@ -1585,7 +1792,7 @@ mod tests {
         let mut a = app();
         a.appearance = Some(Appearance {
             cursor: 0,
-            saved: a.settings,
+            saved: a.settings.clone(),
         });
         for theme in ThemeName::ALL {
             for overlay in [OverlayPos::Docked, OverlayPos::Centered] {
