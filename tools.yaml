@@ -282,3 +282,13 @@ tools:
     pipx: ropper
     run_cmd: ropper
     args_hint: "--file binary.exe --search \"pop rdi\""
+
+  - name: pwntools
+    category: pwn
+    description: CTF exploit-development framework (pwn CLI)
+    exe: pwn
+    install: pipx
+    pipx: pwntools
+    run_cmd: pwn
+    args_hint: "checksec binary.elf"
+    note: Windows support is limited - remote tubes, packing, asm and checksec work; local process/gdb features need Linux or WSL
