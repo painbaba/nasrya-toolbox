@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Join · Winsploit</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script src="/join.js" defer></script>
+</head>
+<body class="message join">
+<!--
+  A LAN guest's first page: a one-time join key (from the host's terminal),
+  then a wait until the host lets them in. Served over HTTPS only.
+-->
+<main>
+  <div class="mark">winsploit</div>
+
+  <section id="step-key">
+    <h1>Join this session</h1>
+    <p>Ask the host for the join key shown in their terminal. Each key works once.</p>
+    <form id="join-form" autocomplete="off" novalidate>
+      <label class="field">
+        <span>Join key</span>
+        <input id="key" class="key-input" placeholder="K7F-29Q" maxlength="9" spellcheck="false"
+               autocapitalize="characters" autocomplete="one-time-code" aria-describedby="join-error">
+      </label>
+      <label class="field">
+        <span>Your name <i>optional, so the host knows it's you</i></span>
+        <input id="name" maxlength="24" placeholder="Taha" spellcheck="false" autocomplete="nickname">
+      </label>
+      <p class="join-error" id="join-error" role="alert" hidden></p>
+      <button type="submit" class="btn primary wide" id="join-btn">Ask to join</button>
+    </form>
+  </section>
+
+  <section id="step-wait" hidden>
+    <div class="wait-spinner" aria-hidden="true"></div>
+    <h1>Waiting for the host</h1>
+    <p>Your request is on the host's screen. They decide whether you can watch or get full control. This page moves on by itself.</p>
+  </section>
+
+  <section id="step-no" hidden>
+    <h1 id="no-title">Not let in</h1>
+    <p id="no-text"></p>
+    <button type="button" class="btn wide" id="again">Use another key</button>
+  </section>
+
+  <p class="cert-note">This connection is encrypted with the host's own certificate, so your browser asked you to trust it once. The host's terminal shows its SHA-256 fingerprint if you want to compare.</p>
+</main>
+</body>
+</html>

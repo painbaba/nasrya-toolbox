@@ -1,6 +1,8 @@
 //! Main dashboard rendering. Every colour, glyph and border comes from the
 //! active `Theme` (see theme.rs), so the `t` overlay can restyle it live.
 
+use std::time::Instant;
+
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -8,13 +10,14 @@ use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap}
 use ratatui::Frame;
 
 use crate::app::{
-    AgentView, App, Appearance, CatTab, ChallengeField, Mode, ProviderPick, ToastKind, ToolStatus,
-    TOUR_STEPS,
+    AgentView, App, Appearance, CatTab, ChallengeField, JoinPrompt, Mode, ProviderPick, ToastKind,
+    ToolStatus, JOIN_CHOICES, JOIN_GRACE, TOUR_STEPS,
 };
 use crate::banner;
 use crate::registry::{self, Launch, Sandbox};
 use crate::session::{RunState, Session, SLOTS};
 use crate::theme::{Backdrop, Field, OverlayPos, Theme, ThemeName};
+use crate::web::{GuestStatus, KeyState};
 
 pub fn render(f: &mut Frame, app: &App) {
     let mut th = app.settings.theme();
@@ -72,6 +75,12 @@ pub fn render(f: &mut Frame, app: &App) {
         render_challenges(f, app, cur, &th, area);
     } else if app.show_help {
         render_help(f, &th, area);
+    } else if let Some(cur) = app.lan_panel {
+        render_lan_panel(f, app, cur, &th, area);
+    }
+    // a guest asking to join comes over the dashboard, under the tour
+    if let Some(p) = &app.join_prompt {
+        render_join_prompt(f, p, &th, area);
     }
     if let Some(step) = app.tour {
         render_tour(f, &th, area, step);
@@ -132,6 +141,10 @@ pub const HELP: &[(&str, &str)] = &[
         "web view: this session in a browser (W: on your LAN)",
     ),
     ("o", "open the web view in your browser"),
+    (
+        "L",
+        "LAN guests: join key · let in (v watch, f full) · x remove · n new key",
+    ),
     ("?", "this help"),
     ("q  Esc", "quit (twice if tools are still running)"),
     ("", ""),
@@ -212,6 +225,165 @@ fn overlay_block<'a>(th: &Theme, title: &'a str, hint: &'a str) -> Block<'a> {
             Line::from(Span::styled(format!(" {hint} "), th.fg(th.pal.dim)))
                 .alignment(Alignment::Right),
         )
+}
+
+/// "X wants to join": watch only / full control / deny. The choices stay
+/// dim for the first moment, while keys are ignored.
+fn render_join_prompt(f: &mut Frame, p: &JoinPrompt, th: &Theme, area: Rect) {
+    let pal = &th.pal;
+    let g = &p.guest;
+    let ready = p.since.elapsed() >= JOIN_GRACE;
+    let who = if g.name.is_empty() {
+        "Someone".to_string()
+    } else {
+        format!("\"{}\"", g.name)
+    };
+    let mut lines = vec![
+        Line::raw(""),
+        Line::from(Span::styled(
+            format!("  {who} wants to join this session"),
+            th.strong(pal.fg),
+        )),
+        Line::from(Span::styled(
+            format!("  {} · {} · used your join key", g.ip, g.agent),
+            th.fg(pal.dim),
+        )),
+        Line::raw(""),
+    ];
+    for (i, (label, desc)) in JOIN_CHOICES.iter().enumerate() {
+        let on = i == p.cursor;
+        let pointer = if on { th.glyph.pointer } else { "  " };
+        let style = if !ready {
+            th.fg(pal.dim)
+        } else if on {
+            th.strong(if i == 2 { pal.err } else { pal.accent })
+        } else {
+            th.fg(pal.fg)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {pointer}{} ", i + 1), style),
+            Span::styled(format!("{label:<14}"), style),
+            Span::styled(desc.to_string(), th.fg(pal.dim)),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    let w = lines.iter().map(|l| l.width()).max().unwrap_or(40) as u16 + 4;
+    let h = lines.len() as u16 + 2;
+    let popup = overlay_area(f, th, area, w, h);
+    f.render_widget(
+        Paragraph::new(lines).block(overlay_block(
+            th,
+            "LAN guest",
+            "1-3 or ↑↓ Enter · Esc decide later",
+        )),
+        popup,
+    );
+}
+
+/// `L`: the LAN view's address, certificate, join key and guests.
+fn render_lan_panel(f: &mut Frame, app: &App, cur: usize, th: &Theme, area: Rect) {
+    let pal = &th.pal;
+    let label = |s: &str| Span::styled(format!("  {s:<13}"), th.fg(pal.dim));
+    let mut lines = vec![Line::raw("")];
+    lines.push(Line::from(vec![
+        label("address"),
+        Span::styled(
+            app.lan_url
+                .clone()
+                .unwrap_or_else(|| "no LAN address found".into()),
+            th.strong(pal.accent),
+        ),
+    ]));
+    if let Some(fp) = app.web.as_ref().and_then(|w| w.fingerprint()) {
+        lines.push(Line::from(vec![
+            label("certificate"),
+            Span::styled(
+                format!("SHA-256 {}…", &fp[..fp.len().min(47)]),
+                th.fg(pal.fg),
+            ),
+        ]));
+    }
+    let mut key = vec![label("join key")];
+    match &app.lan_key {
+        Some(k) if k.state == KeyState::Live => {
+            let left = k
+                .expires
+                .saturating_duration_since(Instant::now())
+                .as_secs();
+            key.push(Span::styled(k.code.clone(), pill(th, pal.accent)));
+            key.push(Span::styled(
+                format!("  one use · {}:{:02} left", left / 60, left % 60),
+                th.fg(pal.dim),
+            ));
+        }
+        Some(k) => {
+            key.push(Span::styled(
+                format!("{} ({})", k.code, k.state.label()),
+                th.fg(pal.dim),
+            ));
+            key.push(Span::styled("  n makes a new one", th.fg(pal.warn)));
+        }
+        None => key.push(Span::styled("none", th.fg(pal.dim))),
+    }
+    lines.push(Line::from(key));
+    lines.push(Line::raw(""));
+
+    let guests = &app.lan_guests;
+    lines.push(Line::from(Span::styled(
+        format!("  guests ({})", guests.len()),
+        th.strong(pal.fg),
+    )));
+    if guests.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "    nobody yet: give someone the address and the key",
+            th.fg(pal.dim),
+        )));
+    }
+    let name_w = guests
+        .iter()
+        .map(|g| g.name.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(4);
+    let cur = cur.min(guests.len().saturating_sub(1));
+    for (i, g) in guests.iter().enumerate() {
+        let on = i == cur;
+        let pointer = if on { th.glyph.pointer } else { "  " };
+        let name = if g.name.is_empty() { "-" } else { &g.name };
+        let (status, color) = match g.status {
+            GuestStatus::Waiting => ("waiting".to_string(), pal.warn),
+            GuestStatus::In(r) => (r.label().to_string(), pal.ok),
+            _ => ("gone".to_string(), pal.dim),
+        };
+        let online = match (g.status, g.online) {
+            (GuestStatus::In(_), 0) => " · offline",
+            (GuestStatus::In(_), _) => " · online",
+            _ => "",
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {pointer}"), th.fg(pal.accent)),
+            Span::styled(
+                format!("{name:<name_w$}  "),
+                if on { th.strong(pal.fg) } else { th.fg(pal.fg) },
+            ),
+            Span::styled(format!("{:<15} ", g.ip.to_string()), th.fg(pal.dim)),
+            Span::styled(format!("{:<20} ", g.agent), th.fg(pal.dim)),
+            Span::styled(status, th.strong(color)),
+            Span::styled(online, th.fg(pal.dim)),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    let w = lines.iter().map(|l| l.width()).max().unwrap_or(40) as u16 + 4;
+    let h = lines.len() as u16 + 2;
+    let popup = overlay_area(f, th, area, w.max(64), h);
+    f.render_widget(
+        Paragraph::new(lines).block(overlay_block(
+            th,
+            "LAN view",
+            "↑↓ pick · v watch · f full · x remove · n new key · Esc close",
+        )),
+        popup,
+    );
 }
 
 fn render_help(f: &mut Frame, th: &Theme, area: Rect) {
@@ -545,7 +717,27 @@ fn render_header(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             n => format!("{n} viewers"),
         };
         let place = if w.lan() { "lan" } else { "web" };
-        (format!("{place} :{} · {who} ", w.port()), w.viewers() > 0)
+        // LAN: the live join key (this header is never mirrored to the web)
+        // and anyone waiting
+        let mut lan = String::new();
+        if w.lan() {
+            match &app.lan_key {
+                Some(k) if k.state == KeyState::Live => lan.push_str(&format!(" · key {}", k.code)),
+                _ => lan.push_str(" · no key (L)"),
+            }
+            let waiting = app
+                .lan_guests
+                .iter()
+                .filter(|g| g.status == GuestStatus::Waiting)
+                .count();
+            if waiting > 0 {
+                lan.push_str(&format!(" · {waiting} waiting (L)"));
+            }
+        }
+        (
+            format!("{place} :{}{lan} · {who} ", w.port()),
+            w.viewers() > 0,
+        )
     });
     let web_w = web
         .as_ref()
@@ -1830,6 +2022,57 @@ mod tests {
         ] {
             assert!(screen.contains(k), "help is missing {k:?}");
         }
+    }
+
+    fn guest(id: u64, name: &str, status: crate::web::GuestStatus) -> crate::web::GuestInfo {
+        crate::web::GuestInfo {
+            id,
+            name: name.into(),
+            ip: [192, 168, 1, 23].into(),
+            agent: "Chrome on Windows".into(),
+            status,
+            online: 1,
+        }
+    }
+
+    #[test]
+    fn lan_panel_and_join_prompt_render() {
+        use crate::web::{GuestStatus, KeyInfo, KeyState, Role};
+        let mut a = app();
+        a.lan_url = Some("https://192.168.1.5:7878".into());
+        a.lan_key = Some(KeyInfo {
+            code: "K7F-29Q".into(),
+            state: KeyState::Live,
+            expires: Instant::now() + std::time::Duration::from_secs(600),
+        });
+        a.lan_guests = vec![
+            guest(1, "Taha", GuestStatus::Waiting),
+            guest(2, "", GuestStatus::In(Role::Control)),
+        ];
+        a.lan_panel = Some(0);
+        let t = screen(&draw(&a, 120, 30), 30);
+        assert!(t.contains("https://192.168.1.5:7878"));
+        assert!(t.contains("K7F-29Q") && t.contains("left"));
+        assert!(t.contains("Taha") && t.contains("waiting"));
+        assert!(t.contains("full control") && t.contains("online"));
+        // a used key says how to get another
+        a.lan_key.as_mut().unwrap().state = KeyState::Used;
+        let t = screen(&draw(&a, 120, 30), 30);
+        assert!(t.contains("n makes a new one"));
+        // small terminals don't panic
+        draw(&a, 40, 10);
+
+        a.lan_panel = None;
+        a.join_prompt = Some(crate::app::JoinPrompt {
+            guest: guest(1, "Taha", GuestStatus::Waiting),
+            cursor: 0,
+            since: Instant::now(),
+        });
+        let t = screen(&draw(&a, 120, 30), 30);
+        assert!(t.contains("\"Taha\" wants to join"));
+        assert!(t.contains("192.168.1.23") && t.contains("Chrome on Windows"));
+        assert!(t.contains("Watch only") && t.contains("Full control") && t.contains("Deny"));
+        draw(&a, 40, 10);
     }
 
     fn screen(t: &Terminal<TestBackend>, h: u16) -> String {

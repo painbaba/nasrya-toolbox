@@ -21,8 +21,10 @@ pub enum AppEvent {
     Exited { sid: u64, code: Option<i32> },
     /// Background detection finished: one result per tool.
     Detected(Vec<detect::Found>),
-    /// An action sent from the web view (see web.rs).
-    Web(crate::web::WebAction),
+    /// An action sent from the web view (see web.rs), and who sent it.
+    Web(crate::web::WebAction, crate::web::Caller),
+    /// LAN view news: a guest waits to be let in, a join key was burned.
+    Lan(crate::web::LanEvent),
     /// The agent finished analysing the output (Ok analysis, or an error message).
     Agent(Result<crate::agent::Analysis, String>),
 }
@@ -388,7 +390,10 @@ mod tests {
                     assert_eq!(sid, 7);
                     break;
                 }
-                AppEvent::Detected(_) | AppEvent::Web(_) | AppEvent::Agent(_) => {}
+                AppEvent::Detected(_)
+                | AppEvent::Web(..)
+                | AppEvent::Lan(_)
+                | AppEvent::Agent(_) => {}
             }
         }
         assert_eq!(lines, ["apple", "pear"]);
@@ -422,7 +427,10 @@ mod tests {
                     assert_eq!(code, Some(0));
                     break;
                 }
-                AppEvent::Detected(_) | AppEvent::Web(_) | AppEvent::Agent(_) => {}
+                AppEvent::Detected(_)
+                | AppEvent::Web(..)
+                | AppEvent::Lan(_)
+                | AppEvent::Agent(_) => {}
             }
         }
         let _ = std::fs::remove_dir_all(&dir);

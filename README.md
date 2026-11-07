@@ -131,8 +131,12 @@ session**, the way Claude Code works.
   Output streams to both, and every run log records where it was started from.
 - The browser adds a **grid** of all four terminals, **log downloads**, **toasts** and optional
   **desktop notifications** when a long scan finishes.
-- **On your network:** `--lan` (or `W` in the dashboard) serves your LAN too, and the terminal
-  prints the link to share. It's plain HTTP, so only use it on networks you trust.
+- **On your network:** `--lan` (or `W` in the dashboard) serves your LAN too, **over HTTPS**.
+  The terminal prints the address, the certificate fingerprint and a **one-time join key**. A
+  guest opens the address, accepts the self-signed certificate once per device, types the key and
+  waits. You choose **Watch only**, **Full control** or **Deny** in the terminal or in your own
+  browser tab. `L` shows the key and every guest, makes a new key, switches roles and removes
+  people. Runs a guest starts are labelled with their name and IP in the output and the run log.
 
 ### 🧩 Config-driven, honest by design
 - Every tool is a **YAML entry**, so you add one without touching code.
@@ -185,7 +189,7 @@ winsploit --version, -V   show version
 
 --catalog <path>          use a specific tools.yaml (works with or without `list`)
 --web / --no-web          open the web view too / terminal only (skips the start-up question)
---lan                     serve the web view to your local network, not only this machine
+--lan                     serve the web view to your local network too (HTTPS, join key + your OK)
 --port <n>                web view port (default 7878, else a free one)
 ```
 
@@ -206,6 +210,7 @@ winsploit --version, -V   show version
 | `S` | Run the selected tool in Windows Sandbox (see below) · `Tab` in the prompt = network on/off |
 | `t` | Appearance: theme, borders, glyphs, overlays (live preview) |
 | `w` · `W` · `o` | Web view: start / stop · serve your LAN · open it in the browser |
+| `L` | LAN guests: join key and who's in · `v` / `f` watch / full control · `x` remove · `n` new key |
 | `?` | Show all keys |
 | `q` | Quit |
 
@@ -422,6 +427,15 @@ that:
   (DNS-rebinding guard) and changes must come from the page itself as JSON (CSRF guard). The
   browser sends the same actions as the keys, never a command line, and the sign-in token is
   masked on the page.
+- **LAN mode is HTTPS with a join key and your approval.** One port serves both: plain HTTP is
+  only accepted from this machine, and the network gets HTTPS with a self-signed certificate kept
+  in `%APPDATA%\winsploit` (so its fingerprint stays the same). The owner's sign-in link only
+  works from loopback and never appears in the LAN address. A guest needs a join key (one use,
+  10 minutes, burnt after 5 wrong tries, compared in constant time) **and** your OK, and gets
+  their own random `HttpOnly; Secure; SameSite=Strict` cookie. Roles are checked on the server:
+  watchers get 403 on every action, only you can admit, remove or make keys, and the key and guest
+  list are never sent to guests. Removing a guest or turning LAN mode off ends their session at
+  once.
 - **Optional isolation for samples.** `S` runs debuggers and other reversing tools in Windows
   Sandbox with the sample read-only, one writable output folder and no network by default.
 
@@ -455,7 +469,8 @@ flowchart LR
 | `runner.rs` | Spawn, stream, stdin pipe, detach (gui/web), kill tree, output cleaning |
 | `runlog.rs` | Per-run log files |
 | `app.rs` | State machine; every key and web request becomes an `Action` handled by `App::apply` |
-| `web.rs` · `web/` | Web view: local HTTP server, event stream, sign-in, and the embedded page |
+| `web.rs` · `web/` | Web view: local HTTP server, event stream, sign-in, LAN guests and join keys, and the embedded pages |
+| `tls.rs` | The LAN view's self-signed certificate: create / load / renew, SHA-256 fingerprint |
 | `sandbox.rs` | Windows Sandbox runs: locate the tool, safety checks, `.wsb` generation |
 | `ui.rs` · `banner.rs` | Dashboard rendering, ASCII splash and wordmark |
 | `bucket_tests.rs` | Validates every manifest in `bucket/` against the catalog |

@@ -25,6 +25,11 @@ const S = {
   expect: null, // { tool }: a run this tab asked for; show its terminal when it appears
   argsFor: null,
   find: { text: '', hits: [], hit: -1 },
+  role: null, // 'owner' (this machine), or a LAN guest's 'control' / 'watch'
+  name: '',
+  admin: null, // owner only: { key, guests, url, fingerprint }
+  dismissed: new Set(), // join requests put off here (they stay in Guests)
+  announced: new Set(), // join requests already notified
 };
 
 const store = {
@@ -94,19 +99,33 @@ function connect() {
   es.addEventListener('state', (e) => onState(JSON.parse(e.data)));
   es.addEventListener('out', (e) => onOut(JSON.parse(e.data)));
   es.addEventListener('toast', (e) => onToast(JSON.parse(e.data)));
-  es.addEventListener('end', () => {
+  es.addEventListener('you', (e) => onYou(JSON.parse(e.data)));
+  es.addEventListener('admin', (e) => onAdmin(JSON.parse(e.data)));
+  es.addEventListener('end', (e) => {
     es.close();
     setConn('ended');
-    ended('Session ended',
-      'The terminal ended this session: it quit, or the web view was turned off with w. ' +
-      'Press o in winsploit to open a new one.');
+    let reason = '';
+    try { reason = JSON.parse(e.data).reason || ''; } catch { /* plain end */ }
+    if (reason === 'removed') {
+      ended('The host removed you', 'You no longer have access to this session. Ask the host if you need to get back in.');
+    } else if (isGuest()) {
+      ended('Session ended', 'The host stopped sharing this session. Ask them for a new join key when it is back.');
+    } else {
+      ended('Session ended',
+        'The terminal ended this session: it quit, or the web view was turned off with w. ' +
+        'Press o in winsploit to open a new one.');
+    }
   });
   es.onopen = () => setConn('live');
   es.onerror = () => {
     if (es.readyState === EventSource.CLOSED) {
       setConn('ended');
-      ended('Not signed in',
-        'This tab has no valid session. Press o in winsploit to open the web view with a fresh link.');
+      if (isGuest()) {
+        ended('Access ended', 'This browser is no longer let in. Reload the page to join again with a new key.');
+      } else {
+        ended('Not signed in',
+          'This tab has no valid session. Press o in winsploit to open the web view with a fresh link.');
+      }
     } else {
       setConn('reconnecting');
     }
@@ -161,6 +180,166 @@ function onToast(t) {
   }
 }
 
+// ------------------------------------------------------- who this page is
+
+const isGuest = () => S.role === 'control' || S.role === 'watch';
+
+function onYou(y) {
+  S.role = y.role || null;
+  S.name = y.name || '';
+  document.body.dataset.role = S.role || 'none';
+  const b = $('role-badge');
+  b.hidden = !isGuest();
+  if (S.role === 'watch') {
+    b.textContent = 'Watching';
+    b.title = 'The host gave you watch-only access: you see everything live, but can\'t run or stop tools.';
+  } else if (S.role === 'control') {
+    b.textContent = 'Guest · full control';
+    b.title = 'The host gave you full control: everything except managing guests.';
+  }
+  b.className = `role-badge ${S.role || ''}`;
+  if (S.role === 'watch') for (const d of document.querySelectorAll('dialog[open]')) d.close();
+  renderGuestsButton();
+  if (S.st) renderCard();
+}
+
+// --------------------------------------------- LAN guests (owner's page)
+
+function renderGuestsButton() {
+  const on = S.role === 'owner' && !!(S.st && S.st.lan);
+  $('open-guests').hidden = !on;
+  const waiting = S.admin ? S.admin.guests.filter((g) => g.status === 'waiting').length : 0;
+  const c = $('guests-count');
+  c.hidden = !on || waiting === 0;
+  c.textContent = waiting;
+}
+
+function onAdmin(a) {
+  S.admin = a;
+  for (const g of a.guests) {
+    if (g.status === 'waiting' && !S.announced.has(g.id)) {
+      S.announced.add(g.id);
+      if (notify && document.hidden) {
+        try { new Notification('winsploit', { body: `${guestName(g)} wants to join`, icon: '/favicon.svg', tag: `join-${g.id}` }); } catch { /* ignore */ }
+      }
+    }
+  }
+  renderGuestsButton();
+  renderRequests();
+  if ($('guests-dialog').open) renderGuestsDialog();
+}
+
+const guestName = (g) => (g.name ? `“${g.name}”` : g.ip);
+
+/** One guest, as a row with the buttons that make sense for them. */
+function guestRow(g) {
+  const row = $('guest-tpl').content.firstElementChild.cloneNode(true);
+  row.querySelector('.avatar').textContent = (g.name || '?').slice(0, 1).toUpperCase();
+  row.querySelector('.g-name').textContent = g.name || 'No name given';
+  row.querySelector('.g-meta').textContent = `${g.ip} · ${g.agent}`;
+  const state = row.querySelector('.g-state');
+  if (g.status === 'waiting') {
+    state.textContent = 'waiting';
+    state.className = 'g-state waiting';
+  } else {
+    state.textContent = `${g.role === 'control' ? 'full control' : 'watch only'}${g.online ? '' : ' · offline'}`;
+    state.className = `g-state ${g.role}`;
+  }
+  for (const b of row.querySelectorAll('[data-action="admit"]')) {
+    const role = b.dataset.role;
+    b.hidden = g.status === 'in' && g.role === role;
+    if (g.status === 'in') b.textContent = role === 'control' ? 'Give full control' : 'Make watch only';
+    b.classList.toggle('primary', g.status === 'waiting' && role === 'watch');
+    b.addEventListener('click', () => act({ type: 'admit', guest: g.id, role }));
+  }
+  const rm = row.querySelector('[data-action="remove"]');
+  rm.textContent = g.status === 'waiting' ? 'Deny' : 'Remove';
+  rm.addEventListener('click', () => act({ type: 'remove', guest: g.id }));
+  return row;
+}
+
+/** Join requests as cards in the corner, until decided or put off. */
+function renderRequests() {
+  const box = $('requests');
+  box.replaceChildren();
+  if (!S.admin) return;
+  for (const g of S.admin.guests) {
+    if (g.status !== 'waiting' || S.dismissed.has(g.id)) continue;
+    const card = document.createElement('div');
+    card.className = 'request';
+    const head = document.createElement('div');
+    head.className = 'request-head';
+    const title = document.createElement('b');
+    title.textContent = `${guestName(g)} wants to join`;
+    const later = document.createElement('button');
+    later.type = 'button';
+    later.className = 'icon-btn sm';
+    later.title = 'Decide later (they keep waiting in Guests)';
+    later.setAttribute('aria-label', 'Decide later');
+    later.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+    later.addEventListener('click', () => { S.dismissed.add(g.id); renderRequests(); });
+    head.append(title, later);
+    card.append(head, guestRow(g));
+    box.append(card);
+  }
+}
+
+let keyTimer = null;
+function renderGuestsDialog() {
+  const a = S.admin;
+  if (!a) return;
+  $('g-url').textContent = a.url || 'no LAN address found';
+  $('g-fp').textContent = a.fingerprint ? `${a.fingerprint.slice(0, 47)}…` : '';
+  $('g-fp').title = a.fingerprint || '';
+  renderKey();
+  const list = $('guest-list');
+  list.replaceChildren();
+  if (!a.guests.length) {
+    const e = document.createElement('p');
+    e.className = 'muted';
+    e.textContent = 'Nobody yet. Give someone the address and the key: their request shows up here and in your terminal.';
+    list.append(e);
+  }
+  for (const g of a.guests) list.append(guestRow(g));
+}
+
+function renderKey() {
+  const k = S.admin && S.admin.key;
+  const code = $('g-key');
+  const st = $('g-key-state');
+  code.textContent = k ? k.code : 'none';
+  let live = !!k && k.state === 'live';
+  let text = '';
+  if (live) {
+    const left = Math.max(0, Math.round((k.expires_ms - Date.now()) / 1000));
+    if (left === 0) live = false;
+    text = live ? `one use · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} left` : 'expired';
+  } else if (k) {
+    text = { used: 'used: make a new one for the next person', expired: 'expired', burned: 'burned after too many wrong tries' }[k.state] || k.state;
+  }
+  code.classList.toggle('dead', !live);
+  st.textContent = text;
+  $('copy-invite').disabled = !live || !S.admin.url;
+}
+
+$('open-guests').addEventListener('click', () => {
+  renderGuestsDialog();
+  $('guests-dialog').showModal();
+  clearInterval(keyTimer);
+  keyTimer = setInterval(() => { if ($('guests-dialog').open) renderKey(); else clearInterval(keyTimer); }, 1000);
+});
+document.querySelector('[data-action="newkey"]').addEventListener('click', () => act({ type: 'newkey' }));
+$('copy-invite').addEventListener('click', async () => {
+  const a = S.admin;
+  const text = `Join my Winsploit session: open ${a.url} (accept the certificate warning; its SHA-256 starts with ${a.fingerprint.slice(0, 23)}) and enter the key ${a.key.code}. It works once, for 10 minutes.`;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Invite copied: address, key and certificate fingerprint');
+  } catch {
+    toast('Copy failed: the browser blocked clipboard access.', 'err');
+  }
+});
+
 // --------------------------------------------------------------- events
 
 function onHello(h) {
@@ -184,6 +363,7 @@ function onState(st) {
   S.st = st;
   if ($('conn').dataset.state !== 'ended') setConn('live');
   $('lan-badge').hidden = !st.lan;
+  renderGuestsButton();
   if (first) {
     // open on a running tool's terminal if there is one
     const running = st.terminals.findIndex((t, i) => i > 0 && t && t.state === 'running');
@@ -886,7 +1066,7 @@ function busySlots() {
 
 function runSelected(slot) {
   const t = S.tools[S.sel];
-  if (!t) return;
+  if (!t || S.role === 'watch') return;
   const takesTerminal = t.launch === 'stream' || (t.launch === 'web' && t.run_cmd);
   if (takesTerminal && slot === undefined && busySlots()) {
     pickSlot(t);

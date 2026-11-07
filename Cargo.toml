@@ -17,6 +17,12 @@ serde_yaml = "0.9"
 serde_json = "1"
 anyhow = "1"
 getrandom = "0.2"
+# HTTPS for LAN mode: std-thread rustls with the ring backend (no async
+# runtime, no cmake/nasm), a self-signed certificate made by rcgen
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring", "pem"] }
+ring = "0.17"
+time = "0.3"
 
 [profile.release]
 opt-level = "z"

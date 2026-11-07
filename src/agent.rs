@@ -218,7 +218,8 @@ pub fn extract_json(s: &str) -> Option<&str> {
 
 /// Parse an `Analysis` out of whatever text the model produced.
 fn analysis_from_text(text: &str) -> Result<Analysis, String> {
-    let json = extract_json(text).ok_or_else(|| "the AI didn't return JSON — try again".to_string())?;
+    let json =
+        extract_json(text).ok_or_else(|| "the AI didn't return JSON — try again".to_string())?;
     serde_json::from_str::<Analysis>(json)
         .map_err(|e| format!("the AI's JSON didn't match the expected shape ({e})"))
 }
@@ -281,8 +282,12 @@ pub fn build_http_body(model: &str, prompt: &str) -> String {
 
 /// Parse an OpenAI-compatible chat response into an `Analysis`.
 pub fn parse_chat(stdout: &str) -> Result<Analysis, String> {
-    let resp: ChatResponse = serde_json::from_str(stdout.trim())
-        .map_err(|e| format!("couldn't read the AI's response ({e}) — raw: {:.200}", stdout.trim()))?;
+    let resp: ChatResponse = serde_json::from_str(stdout.trim()).map_err(|e| {
+        format!(
+            "couldn't read the AI's response ({e}) — raw: {:.200}",
+            stdout.trim()
+        )
+    })?;
     if let Some(err) = resp.error {
         return Err(format!("the API returned an error: {}", err.message.trim()));
     }
@@ -321,7 +326,8 @@ pub fn analyze(
 
 /// The `claude` CLI in print mode, returning its JSON envelope.
 fn run_claude(model: &str, prompt: &str) -> Result<Analysis, String> {
-    let path = detect::resolve("claude").ok_or_else(|| "the claude CLI isn't on PATH".to_string())?;
+    let path =
+        detect::resolve("claude").ok_or_else(|| "the claude CLI isn't on PATH".to_string())?;
     let out = feed(
         Command::new(path).args(["-p", "--output-format", "json", "--model", model]),
         prompt,

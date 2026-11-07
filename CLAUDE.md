@@ -74,6 +74,11 @@ manifest in `bucket/`, and `bucket_tests.rs` validates those manifests against t
 - The web view (web.rs) is off by default, binds 127.0.0.1 unless `--lan`, needs the per-session
   token/cookie, checks Host (IP literals only) and Origin + JSON on POSTs, and only accepts
   `WebAction`s. Never add an endpoint that runs a command line or serves arbitrary files.
+  LAN mode is HTTPS only (tls.rs; plain HTTP is accepted from loopback only, the LAN gets a
+  redirect). The owner token works only from a loopback peer and never goes into the LAN URL.
+  Guests come in with a one-time join key **plus** the owner's approval, and roles are enforced
+  server-side: watchers get 403 on actions, and guest management (`admit` / `remove` / `newkey`)
+  is owner-only. Owner-only data (key, guest list) goes in a frame that is never sent to guests.
 - Windows Sandbox runs (`S`, sandbox.rs) map the tool and sample **read-only**, with one
   writable output folder; network, clipboard, vGPU, audio, camera and printers are off
   (network can be turned on per run). `check_sample_dir` refuses the profile itself, AppData,

@@ -25,6 +25,7 @@ mod sandbox;
 mod scoop;
 mod session;
 mod theme;
+mod tls;
 mod ui;
 mod web;
 mod workspace;
@@ -277,8 +278,9 @@ WEB VIEW (the same live session in your browser; the terminal stays in charge):\
     winsploit --web                      start it and open it in the browser\n\
     winsploit --no-web                   terminal only (skips the start-up question)\n\
     winsploit --port <n>                 serve on port <n> (default 7878, else a free port)\n\
-    winsploit --lan                      serve your local network too (plain HTTP: trusted LANs only)\n\
-    In the dashboard: w starts / stops it, W serves your LAN, o opens it in the browser.\n\n\
+    winsploit --lan                      serve your local network too, over HTTPS: guests need a\n\
+                                         one-time join key and your OK, as watchers or with full control\n\
+    In the dashboard: w starts / stops it, W serves your LAN, L manages guests, o opens it in the browser.\n\n\
 CATALOG (tools.yaml) is looked up in this order:\n\
     --catalog <path>, then %WINSPLOIT_CATALOG%, then next to winsploit.exe,\n\
     then the source checkout (dev builds), then %APPDATA%\\winsploit\\tools.yaml.\n\

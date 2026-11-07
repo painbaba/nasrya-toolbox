@@ -4,7 +4,7 @@
 //! holds installs, hash ids and messages); the tool list is browsed by
 //! category, and a tool can sit in several categories.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -30,8 +30,9 @@ use crate::runner::{self, AppEvent};
 use crate::scoop;
 use crate::session::{RunState, Session, CONSOLE, SLOTS};
 use crate::theme::{Field, Settings};
+use crate::tls;
 use crate::ui;
-use crate::web::{self, WebAction};
+use crate::web::{self, Caller, GuestStatus, LanEvent, Role, WebAction};
 use crate::workspace::{self, Workspace};
 
 /// Something the user asked the session to do. Terminal keys and the web
@@ -63,6 +64,12 @@ pub enum Action {
     HashId(String),
     /// Make the challenge with this id (`<event>/<challenge>`) the active one.
     Challenge(String),
+    /// LAN view: let guest `id` in with `role` (or change their role).
+    Admit(u64, Role),
+    /// LAN view: deny a waiting guest, or remove one who is in.
+    Remove(u64),
+    /// LAN view: a new one-time join key.
+    NewKey,
 }
 
 // kind() and BINDINGS exist for the parity test (and as the checklist above)
@@ -79,6 +86,9 @@ impl Action {
             Action::Redetect => "redetect",
             Action::HashId(_) => "hashid",
             Action::Challenge(_) => "challenge",
+            Action::Admit(..) => "admit",
+            Action::Remove(_) => "remove",
+            Action::NewKey => "newkey",
         }
     }
 
@@ -94,6 +104,10 @@ impl Action {
         ("redetect", "r"),
         ("hashid", "h"),
         ("challenge", "C"),
+        // guests are managed in the L panel (v / f / x / n there)
+        ("admit", "L"),
+        ("remove", "L"),
+        ("newkey", "L"),
     ];
 }
 
@@ -101,15 +115,13 @@ impl Action {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
     Terminal,
-    Web,
+    /// the owner's browser, or a LAN guest's
+    Web(Caller),
 }
 
 impl Source {
-    fn label(self) -> &'static str {
-        match self {
-            Source::Terminal => "terminal",
-            Source::Web => "web",
-        }
+    pub fn is_web(self) -> bool {
+        matches!(self, Source::Web(_))
     }
 }
 
@@ -239,6 +251,27 @@ pub struct Flag {
     pub at: String,
 }
 
+/// "Someone wants to join" in the terminal: let them in to watch, with full
+/// control, or deny.
+pub struct JoinPrompt {
+    pub guest: web::GuestInfo,
+    /// 0 watch only, 1 full control, 2 deny
+    pub cursor: usize,
+    /// When it appeared: keys in the first moment are ignored, so a fast
+    /// `j j Enter` meant for the dashboard can't answer it.
+    pub since: Instant,
+}
+
+/// The join prompt's choices.
+pub const JOIN_CHOICES: [(&str, &str); 3] = [
+    ("Watch only", "sees everything live, can't act"),
+    ("Full control", "run, stop, install, type into tools"),
+    ("Deny", "the key is used up; they'd need a new one"),
+];
+
+/// Keys are ignored this long after the join prompt appears.
+pub const JOIN_GRACE: Duration = Duration::from_millis(700);
+
 /// How long a toast stays up, and how many stack at once.
 pub const TOAST_LIFE: Duration = Duration::from_secs(4);
 pub const MAX_TOASTS: usize = 3;
@@ -314,8 +347,23 @@ pub struct App {
     web_sent: BTreeMap<u64, u64>,
     /// Run logs already offered to the web view, by session id.
     web_logs: BTreeMap<u64, PathBuf>,
-    /// Toasts not yet sent to the web view.
-    web_toasts: Vec<(ToastKind, String)>,
+    /// Toasts not yet sent to the web view (and whether only the owner's
+    /// pages get them).
+    web_toasts: Vec<(ToastKind, String, bool)>,
+    /// The last LAN data (join key, guests) sent to the owner's pages.
+    web_admin: String,
+    /// LAN view: guests waiting or in, and the join key (mirrored from the
+    /// server every frame, for drawing).
+    pub lan_guests: Vec<web::GuestInfo>,
+    pub lan_key: Option<web::KeyInfo>,
+    /// The address guests open (found once, when LAN mode starts).
+    pub lan_url: Option<String>,
+    /// The "X wants to join" prompt, while it's up.
+    pub join_prompt: Option<JoinPrompt>,
+    /// Waiting guests whose prompt was put off with Esc (still in `L`).
+    join_later: BTreeSet<u64>,
+    /// The `L` panel (LAN guests), with its cursor.
+    pub lan_panel: Option<usize>,
     /// The last state sent to the web view (only changes are sent).
     web_state: String,
     catalog_path: PathBuf,
@@ -422,6 +470,13 @@ impl App {
             web_sent: BTreeMap::new(),
             web_logs: BTreeMap::new(),
             web_toasts: Vec::new(),
+            web_admin: String::new(),
+            lan_guests: Vec::new(),
+            lan_key: None,
+            lan_url: None,
+            join_prompt: None,
+            join_later: BTreeSet::new(),
+            lan_panel: None,
             web_state: String::new(),
             catalog_path,
             next_id: CONSOLE,
@@ -524,6 +579,7 @@ impl App {
             }
             self.expire_toasts(Instant::now());
             self.sync_web();
+            self.refresh_join_prompt(Instant::now());
             self.tick = self.tick.wrapping_add(1);
         }
         self.kill_all();
@@ -571,10 +627,19 @@ impl App {
 
     // --------------------------------------------------------------- toasts
 
+    /// A toast here and on every web page.
     pub fn toast(&mut self, kind: ToastKind, text: impl Into<String>) {
-        let text = text.into();
+        self.toast_to(kind, text.into(), false);
+    }
+
+    /// A toast here and on the owner's web pages only (LAN guest news).
+    fn toast_host(&mut self, kind: ToastKind, text: impl Into<String>) {
+        self.toast_to(kind, text.into(), true);
+    }
+
+    fn toast_to(&mut self, kind: ToastKind, text: String, owner_only: bool) {
         if self.web.is_some() {
-            self.web_toasts.push((kind, text.clone()));
+            self.web_toasts.push((kind, text.clone(), owner_only));
         }
         self.toasts.push(Toast {
             text,
@@ -1057,8 +1122,8 @@ impl App {
         let t = self.tools[tool].clone();
         self.next_id += 1;
         let mut s = Session::new(self.next_id, &t.name, &t.description);
-        if src == Source::Web {
-            s.push(":: started from the browser");
+        if let Some(by) = self.started_by(src) {
+            s.push(format!(":: started {by}"));
         }
         if let Some(note) = &t.note {
             s.push(format!(":: note: {note}"));
@@ -1068,7 +1133,7 @@ impl App {
         let cmd = runner::tool_command(&t.run_cmd, &args);
         match runner::spawn_streaming(cmd, self.tx.clone(), true, s.id) {
             Ok(sp) => {
-                s.open_log(&self.logs_dir(), &t.name, &shown, src.label());
+                s.open_log(&self.logs_dir(), &t.name, &shown, &self.source_label(src));
                 self.status_line = format!(
                     "running {} in terminal {} (pid {})",
                     t.name,
@@ -1099,7 +1164,7 @@ impl App {
         }
         match self.free_slot() {
             Some(slot) => self.start_tool(slot, tool, args, src),
-            None if src == Source::Web => {
+            None if src.is_web() => {
                 self.toast(
                     ToastKind::Err,
                     format!("all {SLOTS} terminals are busy: pick one to replace"),
@@ -1296,13 +1361,14 @@ impl App {
                 }
             }
             AppEvent::Detected(found) => self.on_detected(found),
-            AppEvent::Web(action) => self.on_web_action(action),
+            AppEvent::Web(action, caller) => self.on_web_action(action, caller),
+            AppEvent::Lan(ev) => self.on_lan_event(ev),
             AppEvent::Agent(res) => self.on_agent_result(res),
         }
     }
 
     /// Resolve a web request (tools are named, not indexed) and apply it.
-    fn on_web_action(&mut self, action: WebAction) {
+    fn on_web_action(&mut self, action: WebAction, caller: Caller) {
         let tool = |app: &mut App, name: &str| {
             let i = app.tools.iter().position(|t| t.name == name);
             if i.is_none() {
@@ -1336,8 +1402,68 @@ impl App {
             WebAction::Redetect => Action::Redetect,
             WebAction::Hashid { hash } => Action::HashId(hash),
             WebAction::Challenge { id } => Action::Challenge(id),
+            WebAction::Admit { guest, role } => Action::Admit(guest, role),
+            WebAction::Remove { guest } => Action::Remove(guest),
+            WebAction::Newkey => Action::NewKey,
         };
-        self.apply(action, Source::Web);
+        self.apply(action, Source::Web(caller));
+    }
+
+    /// News from the LAN view's connection threads.
+    fn on_lan_event(&mut self, ev: LanEvent) {
+        match ev {
+            LanEvent::JoinRequest(id) => {
+                let Some(g) = self
+                    .web
+                    .as_ref()
+                    .and_then(|w| w.guests().into_iter().find(|g| g.id == id))
+                else {
+                    return;
+                };
+                self.console.push(format!(
+                    ":: {} · {} used the join key and is waiting to be let in",
+                    g.label(),
+                    g.agent
+                ));
+                self.toast_host(ToastKind::Info, format!("{} wants to join", g.label()));
+            }
+            LanEvent::KeyBurned => {
+                self.console.push(format!(
+                    "[err] {} wrong join keys: that key no longer works. L, then n, makes a new one.",
+                    web::KEY_TRIES
+                ));
+                self.toast_host(ToastKind::Err, "join key burned after too many wrong tries");
+            }
+        }
+    }
+
+    /// How a run's source is written in its log: `terminal`, `web`, or
+    /// `web: "Taha" (192.168.1.23)` for a LAN guest.
+    fn source_label(&self, src: Source) -> String {
+        match src {
+            Source::Terminal => "terminal".into(),
+            Source::Web(Caller::Owner) => "web".into(),
+            Source::Web(Caller::Guest(id)) => format!("web: {}", self.guest_label(id)),
+        }
+    }
+
+    /// "from the browser" / "by "Taha" (192.168.1.23) from the LAN", or
+    /// None for the terminal.
+    fn started_by(&self, src: Source) -> Option<String> {
+        match src {
+            Source::Terminal => None,
+            Source::Web(Caller::Owner) => Some("from the browser".into()),
+            Source::Web(Caller::Guest(id)) => {
+                Some(format!("by {} from the LAN", self.guest_label(id)))
+            }
+        }
+    }
+
+    fn guest_label(&self, id: u64) -> String {
+        self.web
+            .as_ref()
+            .and_then(|w| w.guests().into_iter().find(|g| g.id == id))
+            .map_or_else(|| format!("guest #{id}"), |g| g.label())
     }
 
     /// Do `action`. The one place where terminal keys and web requests
@@ -1382,6 +1508,197 @@ impl App {
                     self.toast(ToastKind::Err, format!("no challenge {id:?}"));
                 }
             },
+            // guests never manage guests (the server refuses it too)
+            Action::Admit(..) | Action::Remove(_) | Action::NewKey
+                if matches!(src, Source::Web(Caller::Guest(_))) => {}
+            Action::Admit(id, role) => self.admit_guest(id, role),
+            Action::Remove(id) => self.remove_guest(id),
+            Action::NewKey => self.new_join_key(),
+        }
+    }
+
+    // ----------------------------------------------------------- LAN guests
+
+    /// The LAN view's server, or a note that LAN mode is off.
+    fn lan_server(&mut self) -> Option<&web::Server> {
+        if !self.web.as_ref().is_some_and(web::Server::lan) {
+            self.status_line = "LAN mode is off: W shares this session on your network".into();
+            return None;
+        }
+        self.web.as_ref()
+    }
+
+    fn admit_guest(&mut self, id: u64, role: Role) {
+        let Some(w) = self.lan_server() else { return };
+        let was = w.guests().into_iter().find(|g| g.id == id);
+        match w.admit(id, role) {
+            Some(g) => {
+                let msg = if was.is_some_and(|w| w.status == GuestStatus::Waiting) {
+                    format!("{} is in ({})", g.label(), role.label())
+                } else {
+                    format!("{} now has {}", g.label(), role.label())
+                };
+                self.console.push(format!(":: {msg}"));
+                self.status_line = msg.clone();
+                self.toast_host(ToastKind::Ok, msg);
+            }
+            None => self.status_line = "that guest is gone".into(),
+        }
+        self.mirror_lan();
+    }
+
+    fn remove_guest(&mut self, id: u64) {
+        let Some(w) = self.lan_server() else { return };
+        match w.remove(id) {
+            Some(g) => {
+                let msg = match g.status {
+                    GuestStatus::Denied => format!("{} was turned away", g.label()),
+                    _ => format!("{} was removed", g.label()),
+                };
+                self.console.push(format!(":: {msg}"));
+                self.status_line = msg.clone();
+                self.toast_host(ToastKind::Info, msg);
+            }
+            None => self.status_line = "that guest is gone".into(),
+        }
+        self.mirror_lan();
+    }
+
+    fn new_join_key(&mut self) {
+        let Some(w) = self.lan_server() else { return };
+        match w.new_key() {
+            // not in the console: guests can read the console
+            Ok(_) => self.status_line = "new join key: one use, 10 minutes (shown in L)".into(),
+            Err(e) => self.status_line = format!("couldn't make a join key: {e}"),
+        }
+        self.mirror_lan();
+    }
+
+    /// Copy the server's guests and key, for drawing.
+    fn mirror_lan(&mut self) {
+        match self.web.as_ref().filter(|w| w.lan()) {
+            Some(w) => {
+                self.lan_guests = w.guests();
+                self.lan_key = w.key();
+            }
+            None => {
+                self.lan_guests.clear();
+                self.lan_key = None;
+                self.lan_panel = None;
+                self.join_prompt = None;
+            }
+        }
+    }
+
+    /// Put the join prompt up for the next waiting guest when nothing else
+    /// is going on (not while typing, not over another overlay), and take it
+    /// down if that guest was decided elsewhere (the owner's browser).
+    fn refresh_join_prompt(&mut self, now: Instant) {
+        if let Some(p) = &self.join_prompt {
+            let still = self
+                .lan_guests
+                .iter()
+                .any(|g| g.id == p.guest.id && g.status == GuestStatus::Waiting);
+            if !still {
+                self.join_prompt = None;
+            }
+        }
+        let quiet = self.screen == Screen::Main
+            && self.mode == Mode::Browsing
+            && self.tour.is_none()
+            && self.appearance.is_none()
+            && !self.show_help
+            && self.lan_panel.is_none()
+            && self.agent.is_none()
+            && self.provider_pick.is_none()
+            && self.flags_view.is_none()
+            && self.challenge_view.is_none();
+        if self.join_prompt.is_some() || !quiet {
+            return;
+        }
+        let next = self
+            .lan_guests
+            .iter()
+            .find(|g| g.status == GuestStatus::Waiting && !self.join_later.contains(&g.id));
+        if let Some(g) = next {
+            self.join_prompt = Some(JoinPrompt {
+                guest: g.clone(),
+                cursor: 0,
+                since: now,
+            });
+        }
+    }
+
+    /// Keys while the join prompt is up: 1-3 or arrows + Enter decide, Esc
+    /// puts it off (the guest keeps waiting in `L`).
+    fn on_key_join(&mut self, code: KeyCode) {
+        let Some(p) = self.join_prompt.as_mut() else {
+            return;
+        };
+        if p.since.elapsed() < JOIN_GRACE {
+            return;
+        }
+        let id = p.guest.id;
+        let n = JOIN_CHOICES.len();
+        let pick = match code {
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => {
+                p.cursor = (p.cursor + n - 1) % n;
+                None
+            }
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+                p.cursor = (p.cursor + 1) % n;
+                None
+            }
+            KeyCode::Char(c @ '1'..='3') => Some(c as usize - '1' as usize),
+            KeyCode::Enter => Some(p.cursor),
+            KeyCode::Esc => {
+                self.join_later.insert(id);
+                self.join_prompt = None;
+                self.status_line = "they keep waiting: L lets them in later".into();
+                None
+            }
+            _ => None,
+        };
+        let Some(i) = pick else { return };
+        self.join_prompt = None;
+        let action = match i {
+            0 => Action::Admit(id, Role::Watch),
+            1 => Action::Admit(id, Role::Control),
+            _ => Action::Remove(id),
+        };
+        self.apply(action, Source::Terminal);
+    }
+
+    /// `L`: the LAN panel. ↑↓ pick a guest, v / f let them in (or switch
+    /// their role), x denies or removes, n makes a new join key.
+    fn on_key_lan(&mut self, code: KeyCode) {
+        let Some(cur) = self.lan_panel else { return };
+        let n = self.lan_guests.len();
+        let cur = cur.min(n.saturating_sub(1));
+        let picked = self.lan_guests.get(cur).map(|g| g.id);
+        match code {
+            KeyCode::Up | KeyCode::Char('k') if n > 0 => self.lan_panel = Some((cur + n - 1) % n),
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab if n > 0 => {
+                self.lan_panel = Some((cur + 1) % n)
+            }
+            KeyCode::Char('v') => {
+                if let Some(id) = picked {
+                    self.apply(Action::Admit(id, Role::Watch), Source::Terminal);
+                }
+            }
+            KeyCode::Char('f') => {
+                if let Some(id) = picked {
+                    self.apply(Action::Admit(id, Role::Control), Source::Terminal);
+                }
+            }
+            KeyCode::Char('x') => {
+                if let Some(id) = picked {
+                    self.apply(Action::Remove(id), Source::Terminal);
+                }
+            }
+            KeyCode::Char('n') => self.apply(Action::NewKey, Source::Terminal),
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('L') => self.lan_panel = None,
+            _ => {}
         }
     }
 
@@ -1390,6 +1707,14 @@ impl App {
     fn on_key(&mut self, key: KeyEvent) {
         if self.tour.is_some() {
             self.on_key_tour(key.code);
+            return;
+        }
+        if self.join_prompt.is_some() {
+            self.on_key_join(key.code);
+            return;
+        }
+        if self.lan_panel.is_some() {
+            self.on_key_lan(key.code);
             return;
         }
         if self.appearance.is_some() {
@@ -1569,6 +1894,12 @@ impl App {
             KeyCode::Char('w') => self.toggle_web(self.web_lan),
             KeyCode::Char('W') => self.toggle_web(true),
             KeyCode::Char('o') => self.start_web(true),
+            KeyCode::Char('L') => {
+                if self.lan_server().is_some() {
+                    self.mirror_lan();
+                    self.lan_panel = Some(0);
+                }
+            }
             KeyCode::Char('a') => self.start_analysis(),
             KeyCode::Char('A') => {
                 let cursor = agent::Provider::ALL
@@ -2142,23 +2473,47 @@ impl App {
     /// the default browser.
     fn start_web(&mut self, open: bool) {
         if self.web.is_none() {
+            // the network gets HTTPS only: load (or make) the certificate
+            let identity = if self.web_lan {
+                // tests never touch the real %APPDATA%
+                let dir = if cfg!(test) { None } else { tls::default_dir() };
+                match tls::load_or_create(dir.as_deref()) {
+                    Ok(id) => Some(id),
+                    Err(e) => {
+                        self.console
+                            .push(format!("[err] couldn't set up HTTPS for LAN mode: {e:#}"));
+                        self.set_focus(0);
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
             match web::Server::start(
                 self.web_port,
                 self.web_lan,
                 self.web_hello(),
                 self.tx.clone(),
+                identity,
             ) {
                 Ok(srv) => {
                     let c = &mut self.console;
                     c.push(format!(":: web view on {}", srv.login_url()));
                     if srv.lan() {
                         match srv.lan_url() {
-                            Some(u) => c.push(format!(":: on your network: {u}")),
+                            Some(u) => c.push(format!(":: on your network: {u} (HTTPS only)")),
                             None => c.push(":: on your network: no LAN address found"),
                         }
+                        if let Some(fp) = srv.fingerprint() {
+                            c.push(format!(
+                                ":: certificate SHA-256 {}… (guests can compare it on the \
+                                 browser's warning page)",
+                                &fp[..fp.len().min(23)]
+                            ));
+                        }
                         c.push(
-                            "[err] LAN mode: anyone with that link can run tools as you. \
-                             It's plain HTTP, so share it only on networks you trust.",
+                            ":: guests need a one-time join key and your OK: L shows the key \
+                             and who's waiting",
                         );
                     }
                     c.push(":: same session as this terminal · o opens it · w stops it");
@@ -2175,7 +2530,15 @@ impl App {
                     self.web_sent.clear();
                     self.web_logs.clear();
                     self.web_state.clear();
+                    self.web_admin.clear();
+                    self.join_later.clear();
                     self.set_focus(0);
+                    self.lan_url = self.web.as_ref().and_then(web::Server::lan_url);
+                    self.mirror_lan();
+                    // LAN: show the key and the address right away
+                    if self.lan_key.is_some() {
+                        self.lan_panel = Some(0);
+                    }
                 }
                 Err(e) => {
                     let port = self.web_port.unwrap_or(web::DEFAULT_PORT);
@@ -2203,6 +2566,7 @@ impl App {
         if let Some(was_lan) = self.web.as_ref().map(web::Server::lan) {
             self.web = None; // every open tab shows "session ended"
             self.web_toasts.clear();
+            self.mirror_lan();
             // W on a local web view switches it to the LAN; anything else stops
             if !lan || was_lan {
                 self.console.push(":: web view stopped");
@@ -2368,6 +2732,7 @@ impl App {
         if self.web.is_none() {
             return;
         }
+        self.mirror_lan();
         // what each open terminal still owes the browser:
         // (sid, reset, new lines, seq now, a log to offer)
         let mut owed = Vec::new();
@@ -2405,13 +2770,20 @@ impl App {
             self.web_logs.retain(|sid, _| open.contains(sid));
             w.retain_terms(&open);
         }
-        for (kind, text) in toasts {
+        for (kind, text, owner_only) in toasts {
             let k = match kind {
                 ToastKind::Ok => "ok",
                 ToastKind::Err => "err",
                 ToastKind::Info => "info",
             };
-            w.toast(k, &text);
+            w.toast(k, &text, owner_only);
+        }
+        if w.lan() {
+            let admin = w.admin_json();
+            if admin != self.web_admin {
+                w.push_admin(&admin);
+                self.web_admin = admin;
+            }
         }
         if state != self.web_state {
             w.set_state(state.clone());
@@ -2439,7 +2811,7 @@ impl App {
     fn install(&mut self, idx: usize, src: Source) {
         if self.console.running() {
             self.status_line = "an install is already running (see console, 0)".into();
-            if src == Source::Web {
+            if src.is_web() {
                 self.toast(ToastKind::Err, "an install is already running");
             }
             return;
@@ -2465,9 +2837,9 @@ impl App {
             }
         };
         let line = steps.join(" && ");
-        if src == Source::Web {
+        if let Some(by) = self.started_by(src) {
             self.console
-                .push(format!(":: install of {name} started from the browser"));
+                .push(format!(":: install of {name} started {by}"));
         }
         self.console.push(format!("$ {line}"));
 
@@ -2483,8 +2855,9 @@ impl App {
         match runner::spawn_streaming(cmd, self.tx.clone(), false, CONSOLE) {
             Ok(sp) => {
                 let dir = self.logs_dir();
+                let by = self.source_label(src);
                 self.console
-                    .open_log(&dir, &format!("install-{name}"), &line, src.label());
+                    .open_log(&dir, &format!("install-{name}"), &line, &by);
                 self.console.started(sp.pid, None);
                 self.installing = true;
                 self.status_line = format!("installing {name}…");
@@ -2900,12 +3273,15 @@ mod tests {
         );
         // a second challenge, then switch back from the web: only real ids
         Workspace::create(&root, "HTB", "Lame", "", "").unwrap();
-        a.on_web_action(WebAction::Challenge {
-            id: "HTB/Lame".into(),
-        });
+        a.on_web_action(
+            WebAction::Challenge {
+                id: "HTB/Lame".into(),
+            },
+            Caller::Owner,
+        );
         assert_eq!(a.challenge.as_ref().unwrap().id, "HTB/Lame");
         for bad in ["../x", "C:/Windows/System32", "HTB/../pico-2026"] {
-            a.on_web_action(WebAction::Challenge { id: bad.into() });
+            a.on_web_action(WebAction::Challenge { id: bad.into() }, Caller::Owner);
             assert_eq!(a.challenge.as_ref().unwrap().id, "HTB/Lame", "{bad}");
         }
         let st = a.web_state_json();
@@ -3226,6 +3602,9 @@ mod tests {
             Action::Redetect,
             Action::HashId(String::new()),
             Action::Challenge(String::new()),
+            Action::Admit(1, Role::Watch),
+            Action::Remove(1),
+            Action::NewKey,
         ];
         assert_eq!(every.len(), Action::BINDINGS.len());
         for a in &every {
@@ -3251,32 +3630,41 @@ mod tests {
     #[test]
     fn web_actions_go_through_the_same_path() {
         let mut a = app();
-        a.on_web_action(WebAction::Hashid {
-            hash: "5f4dcc3b5aa765d61d8327deb882cf99".into(),
-        });
+        a.on_web_action(
+            WebAction::Hashid {
+                hash: "5f4dcc3b5aa765d61d8327deb882cf99".into(),
+            },
+            Caller::Owner,
+        );
         assert!(a.console.output.iter().any(|l| l.contains("MD5")));
         // unknown tools are reported, nothing runs
-        a.on_web_action(WebAction::Run {
-            tool: "no-such-tool".into(),
-            args: String::new(),
-            slot: None,
-        });
+        a.on_web_action(
+            WebAction::Run {
+                tool: "no-such-tool".into(),
+                args: String::new(),
+                slot: None,
+            },
+            Caller::Owner,
+        );
         assert!(a.console.output.last().unwrap().contains("unknown tool"));
         // a tool that isn't detected yet isn't launched, but the args land
         // in the shared history
         let name = a.tools[0].name.clone();
-        a.on_web_action(WebAction::Run {
-            tool: name.clone(),
-            args: "-h".into(),
-            slot: None,
-        });
+        a.on_web_action(
+            WebAction::Run {
+                tool: name.clone(),
+                args: "-h".into(),
+                slot: None,
+            },
+            Caller::Owner,
+        );
         assert!(a.slots.iter().all(Option::is_none));
         assert!(a.status_line.contains("still detecting"));
         assert_eq!(a.history.list(&name), ["-h"]);
         // closing from the web closes even a running terminal (the page
         // asks first)
         fake(&mut a, 1, "nmap", true, 0);
-        a.on_web_action(WebAction::Close { term: 2 });
+        a.on_web_action(WebAction::Close { term: 2 }, Caller::Owner);
         assert!(a.slots[1].is_none());
     }
 
@@ -3287,7 +3675,7 @@ mod tests {
             fake(&mut a, i, "busy", true, 0);
         }
         let nmap = a.tools.iter().position(|t| t.name == "nmap").unwrap();
-        a.run_in_slot(nmap, vec![], Source::Web, None);
+        a.run_in_slot(nmap, vec![], Source::Web(Caller::Owner), None);
         assert_eq!(a.mode, Mode::Browsing, "the terminal's picker stays closed");
         assert!(a.toasts.last().unwrap().text.contains("busy"));
     }
@@ -3325,11 +3713,161 @@ mod tests {
         assert!(a.status_line.contains("nmap finished in terminal 1"));
     }
 
+    /// An app serving the LAN (on a free port, certificate in memory).
+    fn lan_app() -> App {
+        let mut a = app();
+        a.screen = Screen::Main;
+        a.web_lan = true;
+        a.web_port = Some(0);
+        a.start_web(false);
+        assert!(
+            a.web.as_ref().is_some_and(web::Server::lan),
+            "LAN view didn't start"
+        );
+        a
+    }
+
+    /// Run one frame's worth of LAN bookkeeping.
+    fn frame(a: &mut App) {
+        a.sync_web();
+        a.refresh_join_prompt(Instant::now());
+    }
+
+    fn past_grace(a: &mut App) {
+        if let Some(p) = a.join_prompt.as_mut() {
+            p.since = Instant::now() - JOIN_GRACE - Duration::from_millis(1);
+        }
+    }
+
+    #[test]
+    fn lan_mode_shows_the_key_and_asks_before_letting_anyone_in() {
+        let mut a = lan_app();
+        // W opens the L panel with the key; nothing secret goes to the console
+        assert_eq!(a.lan_panel, Some(0));
+        let jk = a.lan_key.clone().expect("a join key");
+        assert!(a
+            .console
+            .output
+            .iter()
+            .any(|l| l.contains("certificate SHA-256")));
+        assert!(!a.console.output.iter().any(|l| l.contains(&jk.code)));
+        assert!(!a
+            .console
+            .output
+            .iter()
+            .any(|l| l.contains("?t=") && l.contains("network")));
+
+        let id = a.web.as_ref().unwrap().add_test_guest("Taha");
+        a.on_runner_event(AppEvent::Lan(LanEvent::JoinRequest(id)));
+        assert!(a
+            .console
+            .output
+            .last()
+            .unwrap()
+            .contains("\"Taha\" (192.168.1.23)"));
+        // no prompt over the open panel, nor while typing
+        frame(&mut a);
+        assert!(a.join_prompt.is_none());
+        a.on_key(key(KeyCode::Esc));
+        a.mode = Mode::Filter;
+        frame(&mut a);
+        assert!(a.join_prompt.is_none());
+        a.mode = Mode::Browsing;
+        frame(&mut a);
+        assert_eq!(a.join_prompt.as_ref().map(|p| p.guest.id), Some(id));
+        // keys right after it appears are ignored (a fast j j Enter)
+        a.on_key(key(KeyCode::Char('2')));
+        assert!(a.join_prompt.is_some());
+        past_grace(&mut a);
+        a.on_key(key(KeyCode::Char('2')));
+        assert!(a.join_prompt.is_none());
+        let g = &a.web.as_ref().unwrap().guests()[0];
+        assert_eq!(g.status, GuestStatus::In(Role::Control));
+        assert!(a
+            .console
+            .output
+            .last()
+            .unwrap()
+            .contains("is in (full control)"));
+
+        // a run by that guest says who started it
+        assert_eq!(
+            a.source_label(Source::Web(Caller::Guest(id))),
+            "web: \"Taha\" (192.168.1.23)"
+        );
+        assert_eq!(
+            a.started_by(Source::Web(Caller::Guest(id))).unwrap(),
+            "by \"Taha\" (192.168.1.23) from the LAN"
+        );
+        // ...but a guest can't manage guests, even if a request got through
+        a.on_web_action(WebAction::Remove { guest: id }, Caller::Guest(id));
+        a.on_web_action(WebAction::Newkey, Caller::Guest(id));
+        assert_eq!(a.web.as_ref().unwrap().guests().len(), 1);
+        assert_eq!(a.web.as_ref().unwrap().key().unwrap().code, jk.code);
+        // the owner's browser can
+        a.on_web_action(
+            WebAction::Admit {
+                guest: id,
+                role: Role::Watch,
+            },
+            Caller::Owner,
+        );
+        assert_eq!(
+            a.web.as_ref().unwrap().guests()[0].status,
+            GuestStatus::In(Role::Watch)
+        );
+    }
+
+    #[test]
+    fn join_requests_can_wait_and_the_l_panel_decides() {
+        let mut a = lan_app();
+        a.lan_panel = None;
+        let w = a.web.as_ref().unwrap();
+        let first = w.add_test_guest("Sam");
+        let second = w.add_test_guest("");
+        frame(&mut a);
+        assert_eq!(a.join_prompt.as_ref().unwrap().guest.id, first);
+        // Esc: decide later; the next one comes up, the first doesn't again
+        past_grace(&mut a);
+        a.on_key(key(KeyCode::Esc));
+        frame(&mut a);
+        assert_eq!(a.join_prompt.as_ref().unwrap().guest.id, second);
+        past_grace(&mut a);
+        a.on_key(key(KeyCode::Down));
+        a.on_key(key(KeyCode::Down));
+        a.on_key(key(KeyCode::Enter)); // Deny
+        frame(&mut a);
+        assert!(a.join_prompt.is_none());
+        assert_eq!(a.lan_guests.len(), 1);
+        assert!(a.console.output.last().unwrap().contains("turned away"));
+
+        // L: the waiting one is there; v lets them in, x removes them
+        a.on_key(key(KeyCode::Char('L')));
+        assert_eq!(a.lan_panel, Some(0));
+        a.on_key(key(KeyCode::Char('v')));
+        frame(&mut a);
+        assert_eq!(a.lan_guests[0].status, GuestStatus::In(Role::Watch));
+        a.on_key(key(KeyCode::Char('x')));
+        frame(&mut a);
+        assert!(a.lan_guests.is_empty());
+        // n: a new key
+        let old = a.lan_key.clone().unwrap().code;
+        a.on_key(key(KeyCode::Char('n')));
+        assert_ne!(a.lan_key.clone().unwrap().code, old);
+        // w stops it all
+        a.on_key(key(KeyCode::Esc));
+        a.on_key(key(KeyCode::Char('w')));
+        assert!(a.web.is_none() && a.lan_key.is_none() && a.lan_panel.is_none());
+        // L without LAN mode explains
+        a.on_key(key(KeyCode::Char('L')));
+        assert!(a.lan_panel.is_none() && a.status_line.contains("LAN mode is off"));
+    }
+
     #[test]
     fn redetect_during_a_pass_runs_again_after_it() {
         let mut a = app();
         a.detecting = true;
-        a.apply(Action::Redetect, Source::Web);
+        a.apply(Action::Redetect, Source::Web(Caller::Owner));
         assert!(a.redetect_queued);
         // the stale pass's result is dropped and a fresh pass starts
         a.on_detected(vec![detect::Found::Missing; a.tools.len()]);

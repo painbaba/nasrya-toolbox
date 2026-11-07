@@ -31,7 +31,11 @@
     <span class="stat" id="stat-conflict" hidden><i class="dot conflict"></i><b id="n-conflict">0</b> PATH</span>
   </div>
   <div class="spacer"></div>
-  <span class="lan-badge" id="lan-badge" hidden title="This web view is served to your local network">LAN</span>
+  <span class="lan-badge" id="lan-badge" hidden title="This web view is served to your local network over HTTPS">LAN</span>
+  <span class="role-badge" id="role-badge" hidden></span>
+  <button type="button" class="btn ghost" id="open-guests" hidden title="LAN guests and the join key (L in the terminal)">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 4.6a3.2 3.2 0 0 1 0 6.3M18 14.3c1.8.8 3 2.7 3 4.9"/></svg><span>Guests</span><b class="count" id="guests-count" hidden>0</b>
+  </button>
   <div class="conn" id="conn" data-state="connecting" title="This page mirrors the terminal session">
     <i class="dot"></i><span id="conn-text">Connecting…</span>
   </div>
@@ -137,6 +141,41 @@
   <p class="muted">Everything here also works from the terminal, and both views stay in sync.</p>
   <div class="dialog-actions"><button type="button" class="btn primary" data-close>Got it</button></div>
 </dialog>
+
+<dialog id="guests-dialog" class="wide" aria-labelledby="guests-title">
+  <h2 id="guests-title">LAN guests</h2>
+  <p>On your network, others open <code id="g-url">…</code> and type the key below. Each key works once, and you decide who gets in.</p>
+  <div class="join-key">
+    <div class="jk-main">
+      <span class="jk-label">Join key</span>
+      <code id="g-key">…</code>
+      <small id="g-key-state"></small>
+    </div>
+    <div class="jk-actions">
+      <button type="button" class="btn sm ghost" id="copy-invite" title="Copy the address and the key, to paste in a chat">Copy invite</button>
+      <button type="button" class="btn sm" data-action="newkey" title="A new one-time key (n in the L panel)">New key</button>
+    </div>
+  </div>
+  <p class="fp">Certificate SHA-256 <code id="g-fp">…</code> · guests can compare it on their browser's warning page.</p>
+  <h3>Guests</h3>
+  <div class="guest-list" id="guest-list"></div>
+  <div class="dialog-actions"><button type="button" class="btn primary" data-close>Done</button></div>
+</dialog>
+
+<div class="requests" id="requests" aria-live="assertive"></div>
+
+<template id="guest-tpl">
+  <div class="guest">
+    <span class="avatar" aria-hidden="true"></span>
+    <span class="who"><b class="g-name"></b><small class="g-meta"></small></span>
+    <span class="g-state"></span>
+    <span class="g-actions">
+      <button type="button" class="btn sm" data-action="admit" data-role="watch" title="Sees everything live, can't act">Watch only</button>
+      <button type="button" class="btn sm" data-action="admit" data-role="control" title="Run, stop, install, type into tools">Full control</button>
+      <button type="button" class="btn sm danger-soft" data-action="remove">Remove</button>
+    </span>
+  </div>
+</template>
 
 <div class="ended" id="ended" hidden>
   <div class="ended-card">
