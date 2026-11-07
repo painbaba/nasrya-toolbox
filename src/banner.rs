@@ -148,9 +148,14 @@ pub fn render_splash(f: &mut Frame, tick: u64, th: &Theme) {
 pub fn wordmark(th: &Theme) -> Line<'static> {
     let p = &th.pal;
     Line::from(vec![
+        // accent text, no pill: the solid bar is reserved for the selection
         Span::styled(
-            " winsploit ",
-            th.emph(Style::default().fg(p.ink).bg(p.accent)),
+            if th.glyph.icons {
+                " ⚡ winsploit"
+            } else {
+                " winsploit"
+            },
+            th.strong(p.accent),
         ),
         Span::styled("  ", Style::default()),
         Span::styled("native-windows security toolbox", th.fg(p.fg)),

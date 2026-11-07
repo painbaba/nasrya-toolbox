@@ -7,43 +7,45 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, Appearance, CatTab, Mode, ToolStatus};
+use crate::app::{App, Appearance, CatTab, Mode, ToastKind, ToolStatus, TOUR_STEPS};
 use crate::banner;
 use crate::registry::{self, Launch};
 use crate::session::{RunState, Session, SLOTS};
 use crate::theme::{Backdrop, Field, OverlayPos, Theme, ThemeName};
 
 pub fn render(f: &mut Frame, app: &App) {
-    let th = app.settings.theme();
+    let mut th = app.settings.theme();
+    th.mono = app.mono;
+    let th = th;
     let area = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // header
+            Constraint::Length(1), // category bar, full width
             Constraint::Min(3),    // body
             Constraint::Length(1), // footer / input
         ])
         .split(area);
 
     render_header(f, app, &th, chunks[0]);
+    render_categories(f, app, &th, chunks[1]);
 
     let body = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(36), Constraint::Percentage(64)])
-        .split(chunks[1]);
+        .split(chunks[2]);
 
-    // left: category bar, tool list, card for the selected tool
+    // left: tool list, card for the selected tool
     let left = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
             Constraint::Min(3),
-            Constraint::Length(if body[0].height >= 16 { 6 } else { 0 }),
+            Constraint::Length(if body[0].height >= 15 { 6 } else { 0 }),
         ])
         .split(body[0]);
-    render_categories(f, app, &th, left[0]);
-    render_tool_list(f, app, &th, left[1]);
-    render_tool_card(f, app, &th, left[2]);
+    render_tool_list(f, app, &th, left[0]);
+    render_tool_card(f, app, &th, left[1]);
 
     // right: terminal tabs, then one terminal or the 2x2 grid
     let right = Layout::default()
@@ -52,11 +54,16 @@ pub fn render(f: &mut Frame, app: &App) {
         .split(body[1]);
     render_terminal_tabs(f, app, &th, right[0]);
     render_terminals(f, app, &th, right[1]);
-    render_footer(f, app, &th, chunks[2]);
+    render_footer(f, app, &th, chunks[3]);
+    // toasts sit under the overlays, the tour over everything
+    render_toasts(f, app, &th, chunks[2]);
     if let Some(ap) = &app.appearance {
         render_appearance(f, app, ap, &th, area);
     } else if app.show_help {
         render_help(f, &th, area);
+    }
+    if let Some(step) = app.tour {
+        render_tour(f, &th, area, step);
     }
 }
 
@@ -109,15 +116,7 @@ pub const HELP: &[(&str, &str)] = &[
 fn overlay_area(f: &mut Frame, th: &Theme, area: Rect, w: u16, h: u16) -> Rect {
     let h = h.min(area.height);
     let popup = match th.overlay {
-        OverlayPos::Centered => {
-            let w = w.min(area.width);
-            Rect {
-                x: area.x + area.width.saturating_sub(w) / 2,
-                y: area.y + area.height.saturating_sub(h) / 2,
-                width: w,
-                height: h,
-            }
-        }
+        OverlayPos::Centered => centered(area, w, h),
         OverlayPos::Docked => {
             // keep the footer row visible; leave the header if there's room
             let h = h.min(area.height.saturating_sub(1).max(1));
@@ -129,19 +128,47 @@ fn overlay_area(f: &mut Frame, th: &Theme, area: Rect, w: u16, h: u16) -> Rect {
             }
         }
     };
-    if th.backdrop == Backdrop::Dim {
-        let buf = f.buffer_mut();
-        for y in area.top()..area.bottom() {
-            for x in area.left()..area.right() {
-                let cell = &mut buf[(x, y)];
-                cell.set_fg(th.pal.dim);
-                cell.set_bg(Color::Reset);
-                cell.modifier = Modifier::DIM;
-            }
-        }
-    }
+    dim_backdrop(f, th, area);
     f.render_widget(Clear, popup);
     popup
+}
+
+/// A `w` x `h` box in the middle of `area` (clamped to fit).
+fn centered(area: Rect, w: u16, h: u16) -> Rect {
+    let w = w.min(area.width);
+    let h = h.min(area.height);
+    Rect {
+        x: area.x + area.width.saturating_sub(w) / 2,
+        y: area.y + area.height.saturating_sub(h) / 2,
+        width: w,
+        height: h,
+    }
+}
+
+/// Fade everything already drawn, if the backdrop setting asks for it.
+fn dim_backdrop(f: &mut Frame, th: &Theme, area: Rect) {
+    if th.backdrop != Backdrop::Dim {
+        return;
+    }
+    let buf = f.buffer_mut();
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut buf[(x, y)];
+            cell.set_fg(th.pal.dim);
+            cell.set_bg(Color::Reset);
+            cell.modifier = Modifier::DIM;
+        }
+    }
+}
+
+/// A solid label (prompt names, a pending confirm). Reverse video when
+/// colours are stripped, or the background would vanish.
+fn pill(th: &Theme, bg: Color) -> Style {
+    if th.mono {
+        Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
+    } else {
+        th.emph(Style::default().fg(th.pal.ink).bg(bg))
+    }
 }
 
 /// The frame every overlay shares: accent border, bold title, hint bottom right.
@@ -302,14 +329,11 @@ fn preview_lines(th: &Theme) -> Vec<Line<'static>> {
     };
     vec![
         Line::from(vec![
-            Span::styled(g.pointer, th.emph(Style::default().fg(p.ink).bg(p.accent))),
-            Span::styled(
-                "nmap      recon    ",
-                th.emph(Style::default().fg(p.ink).bg(p.accent)),
-            ),
+            Span::styled(g.pointer, th.selected()),
+            Span::styled("nmap      recon    ", th.selected()),
         ]),
         tool(g.installed, p.ok, "ffuf", "web"),
-        tool(g.missing, p.err, "sqlmap", "web"),
+        tool(g.missing, p.dim, "sqlmap", "web"),
         tool(g.conflict, p.warn, "john", "cracking"),
         Line::raw(""),
         Line::from(Span::styled(
@@ -341,21 +365,14 @@ fn render_header(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
     let p = &th.pal;
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(10), Constraint::Length(40)])
+        .constraints([Constraint::Min(10), Constraint::Length(52)])
         .split(area);
 
     f.render_widget(Paragraph::new(banner::wordmark(th)), cols[0]);
 
-    let installed = app
-        .status
-        .iter()
-        .filter(|s| **s == ToolStatus::Installed)
-        .count();
-    let missing = app
-        .status
-        .iter()
-        .filter(|s| **s == ToolStatus::Missing)
-        .count();
+    let count = |st: ToolStatus| app.status.iter().filter(|s| **s == st).count();
+    let installed = count(ToolStatus::Installed);
+    let missing = count(ToolStatus::Missing);
 
     let mut stats = Vec::new();
     let running = app.running_count();
@@ -367,47 +384,138 @@ fn render_header(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             th.strong(p.warn),
         ));
     }
+    // labelled, so nobody has to guess what the dots mean
     stats.extend([
         Span::styled(th.glyph.installed, th.fg(p.ok)),
-        Span::styled(format!(" {installed} "), th.fg(p.fg)),
-        Span::styled(th.glyph.missing, th.fg(p.err)),
-        Span::styled(format!(" {missing} "), th.fg(p.fg)),
+        Span::styled(format!(" {installed} ready  "), th.fg(p.fg)),
+        Span::styled(th.glyph.missing, th.fg(p.dim)),
+        Span::styled(format!(" {missing} to get "), th.fg(p.fg)),
         Span::styled(format!("· {} tools ", app.tools.len()), th.fg(p.dim)),
     ]);
     let stats = Line::from(stats).alignment(Alignment::Right);
     f.render_widget(Paragraph::new(stats), cols[1]);
 }
 
-/// The category bar: every tab with how many tools it shows (with the
-/// current filter applied), scrolled so the active one is always in view.
+/// The emoji in front of a category chip (unicode glyph set only).
+fn cat_icon(tab: &CatTab) -> &'static str {
+    match tab {
+        CatTab::All => "★",
+        CatTab::Installed => "✓",
+        CatTab::Cat(id) => match id.as_str() {
+            "osint" => "🔎",
+            "recon" => "📡",
+            "network" => "🔌",
+            "web" => "🌐",
+            "exploit" => "💥",
+            "passwords" => "🔑",
+            "reversing" => "🧩",
+            "pwn" => "💣",
+            "mobile" => "📱",
+            "forensics" => "🔬",
+            "crypto" => "🔐",
+            "stego" => "🎭",
+            "wordlists" => "📚",
+            _ => "📦",
+        },
+    }
+}
+
+/// The category bar: a full-width row of chips with how many tools each
+/// shows (filter applied), scrolled so the active one is in view, with
+/// markers when chips are hidden off either edge.
 fn render_categories(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
     let p = &th.pal;
-    let chips: Vec<(String, usize)> = app
+    let g = th.glyph;
+    let sep = if g.icons { " │ " } else { " | " };
+    let chips: Vec<Line> = app
         .cat_tabs
         .iter()
-        .map(|t| (t.label(), app.visible_in(t).len()))
+        .enumerate()
+        .map(|(i, t)| {
+            let n = app.visible_in(t).len();
+            let icon = if g.icons {
+                format!("{} ", cat_icon(t))
+            } else {
+                String::new()
+            };
+            if i == app.cat {
+                // text, not a bar: the solid bar belongs to the selected tool
+                let on = th.strong(p.accent).add_modifier(Modifier::UNDERLINED);
+                Line::from(Span::styled(format!("{icon}{} {n}", t.label()), on))
+            } else {
+                let name = if n == 0 { th.fg(p.dim) } else { th.fg(p.fg) };
+                Line::from(vec![
+                    Span::styled(format!("{icon}{}", t.label()), name),
+                    Span::styled(format!(" {n}"), th.fg(p.dim)),
+                ])
+            }
+        })
         .collect();
-    let width = |c: &(String, usize)| c.0.chars().count() + c.1.to_string().len() + 3;
-    let avail = area.width as usize;
+    if chips.is_empty() {
+        return;
+    }
+    let w: Vec<usize> = chips.iter().map(Line::width).collect();
+    let sep_w = sep.chars().count();
+    let run = |a: usize, b: usize| w[a..=b].iter().sum::<usize>() + sep_w * (b - a);
+    // two columns on each side for the overflow markers
+    let avail = (area.width as usize).saturating_sub(4);
+    let active = app.cat.min(chips.len() - 1);
     let mut start = 0;
-    while start < app.cat && chips[start..=app.cat].iter().map(width).sum::<usize>() + 2 > avail {
+    while start < active && run(start, active) > avail {
         start += 1;
     }
-    let mut spans = Vec::new();
-    if start > 0 {
-        spans.push(Span::styled(th.glyph.left, th.fg(p.dim)));
+    let mut end = active.max(start);
+    while end + 1 < chips.len() && run(start, end + 1) <= avail {
+        end += 1;
     }
-    for (i, (label, n)) in chips.iter().enumerate().skip(start) {
-        if i == app.cat {
-            let on = th.emph(Style::default().fg(p.ink).bg(p.accent));
-            spans.push(Span::styled(format!(" {label} {n} "), on));
+
+    let mut spans = vec![Span::styled(
+        if start > 0 {
+            format!("{} ", g.more_l)
         } else {
-            let name = if *n == 0 { th.fg(p.dim) } else { th.fg(p.fg) };
-            spans.push(Span::styled(format!(" {label} "), name));
-            spans.push(Span::styled(format!("{n} "), th.fg(p.dim)));
+            "  ".to_string()
+        },
+        th.fg(p.dim),
+    )];
+    for (i, chip) in chips.iter().enumerate().take(end + 1).skip(start) {
+        if i > start {
+            spans.push(Span::styled(sep, th.fg(p.dim)));
         }
+        spans.extend(chip.spans.iter().cloned());
+    }
+    if end + 1 < chips.len() {
+        spans.push(Span::styled(format!(" {}", g.more_r), th.fg(p.dim)));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Icon, its colour, and the short badge shown at the end of a list row.
+fn status_look(th: &Theme, st: ToolStatus) -> (&'static str, Color, &'static str) {
+    let p = &th.pal;
+    let g = th.glyph;
+    let fancy = g.icons;
+    match st {
+        ToolStatus::Installed => (g.installed, p.ok, if fancy { "✓ ready" } else { "ready" }),
+        // not installed is an offer, not an error: no red
+        ToolStatus::Missing => (g.missing, p.dim, "+ get"),
+        ToolStatus::Unknown => (g.unknown, p.dim, if fancy { "…" } else { "..." }),
+        ToolStatus::Conflict => (g.conflict, p.warn, "! PATH"),
+    }
+}
+
+/// `s` cut to `max` columns, with an ellipsis when something was dropped.
+fn clip(s: &str, max: usize, fancy: bool) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    if !fancy {
+        return s.chars().take(max).collect();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    if max > 0 {
+        out.push('…');
+    }
+    out
 }
 
 fn render_tool_list(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
@@ -421,17 +529,15 @@ fn render_tool_list(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         .map(|t| t.name.chars().count())
         .max()
         .unwrap_or(0);
+    let glow_w = g.glow_l.chars().count();
+    let content_w = (area.width.saturating_sub(2) as usize).saturating_sub(glow_w * 2);
     let visible = app.visible();
     let items: Vec<ListItem> = visible
         .iter()
         .map(|&i| {
             let t = &app.tools[i];
-            let (icon, color) = match app.status[i] {
-                ToolStatus::Installed => (g.installed, p.ok),
-                ToolStatus::Missing => (g.missing, p.err),
-                ToolStatus::Unknown => (g.unknown, p.dim),
-                ToolStatus::Conflict => (g.conflict, p.warn),
-            };
+            let st = app.status[i];
+            let (icon, color, badge) = status_look(th, st);
             // its other categories (the one being browsed goes without saying)
             let others: Vec<&str> = t
                 .categories
@@ -439,12 +545,46 @@ fn render_tool_list(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
                 .map(String::as_str)
                 .filter(|c| !matches!(tab, CatTab::Cat(id) if id == c))
                 .collect();
-            let line = Line::from(vec![
-                Span::styled(format!("{icon} "), th.fg(color)),
-                Span::styled(format!("{:<name_w$}", t.name), th.strong(p.fg)),
-                Span::styled(format!(" {}", others.join(" ")), th.fg(p.dim)),
-            ]);
-            ListItem::new(line)
+            let name = format!("{:<name_w$}", t.name);
+            let tail = if i == app.selected {
+                match st {
+                    ToolStatus::Installed if g.icons => "⏎ run",
+                    ToolStatus::Installed => "Enter run",
+                    ToolStatus::Conflict => "! PATH",
+                    _ => "i install",
+                }
+            } else {
+                badge
+            };
+            // "▸ ● name " before it, " badge " after it
+            let room = content_w.saturating_sub(5 + name_w + tail.chars().count() + 2);
+            let others = clip(&others.join(" "), room, g.icons);
+
+            if i == app.selected {
+                // the glow bar: one solid "you are here", with what Enter does
+                let hint = tail;
+                let left = format!("{} {icon} {name} {others}", g.arrow);
+                let used = Span::raw(left.as_str()).width() + hint.chars().count() + 1;
+                let pad = " ".repeat(content_w.saturating_sub(used).max(1));
+                return ListItem::new(Line::from(vec![
+                    Span::styled(g.glow_l, th.fg(p.accent)),
+                    Span::styled(format!("{left}{pad}{hint} "), th.selected()),
+                    Span::styled(g.glow_r, th.fg(p.accent)),
+                ]));
+            }
+
+            let left_w = Span::raw(format!("  {icon} {name} {others}")).width();
+            let used = left_w + badge.chars().count() + 1;
+            let pad = " ".repeat(content_w.saturating_sub(used).max(1));
+            ListItem::new(Line::from(vec![
+                Span::raw(" ".repeat(glow_w + 2)),
+                Span::styled(icon, th.fg(color)),
+                Span::raw(" "),
+                Span::styled(name, th.strong(p.fg)),
+                Span::styled(format!(" {others}"), th.fg(p.dim)),
+                Span::raw(pad),
+                Span::styled(badge, th.fg(color)),
+            ]))
         })
         .collect();
 
@@ -469,32 +609,46 @@ fn render_tool_list(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         .title_bottom(Line::from(Span::styled(pos, th.fg(p.dim))).alignment(Alignment::Right));
 
     if items.is_empty() {
-        // say where the matches are instead of showing an empty box
+        // a friendly face and where to look, instead of an empty box
         let elsewhere = app.visible_in(&CatTab::All).len();
-        let mut lines = vec![Line::from(Span::styled(
-            format!("nothing in {} matches", tab.label()),
-            th.fg(p.dim).add_modifier(Modifier::ITALIC),
-        ))];
-        if !app.filter.trim().is_empty() && elsewhere > 0 {
+        let filter = app.filter.trim();
+        let face = if g.icons { "( ˘ ᵕ ˘ )" } else { "(-_-)" };
+        let what = if !filter.is_empty() {
+            format!("nothing for \"{filter}\" in {}", tab.label())
+        } else if matches!(tab, CatTab::Installed) {
+            "nothing installed yet".to_string()
+        } else {
+            format!("nothing in {} yet", tab.label())
+        };
+        let mut lines = vec![
+            Line::raw(""),
+            Line::from(Span::styled(face, th.strong(p.accent))),
+            Line::raw(""),
+            Line::from(Span::styled(what, th.fg(p.fg))),
+        ];
+        if !filter.is_empty() && elsewhere > 0 {
             lines.push(Line::from(Span::styled(
-                format!("{elsewhere} match(es) in All · ← → to look"),
+                format!("{elsewhere} match(es) in All · ← → to look · Esc clears"),
                 th.fg(p.info),
             )));
         } else if matches!(tab, CatTab::Installed) {
             lines.push(Line::from(Span::styled(
-                "pick a tool in another category and press i",
+                "pick a tool and press i to install it",
                 th.fg(p.info),
             )));
         }
-        f.render_widget(Paragraph::new(lines).block(block), area);
+        f.render_widget(
+            Paragraph::new(lines)
+                .alignment(Alignment::Center)
+                .wrap(ratatui::widgets::Wrap { trim: true })
+                .block(block),
+            area,
+        );
         return;
     }
 
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(th.emph(Style::default().bg(p.accent).fg(p.ink)))
-        .highlight_symbol(g.pointer);
-
+    // the selected row draws its own bar, so no highlight style or symbol
+    let list = List::new(items).block(block);
     let mut state = ListState::default();
     state.select(sel_pos);
     f.render_stateful_widget(list, area, &mut state);
@@ -521,12 +675,6 @@ fn render_tool_card(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             Span::styled(label, th.fg(p.fg))
         });
     }
-    let (icon, color, state) = match app.status[app.selected] {
-        ToolStatus::Installed => (g.installed, p.ok, "installed"),
-        ToolStatus::Missing => (g.missing, p.err, "not installed · i installs"),
-        ToolStatus::Unknown => (g.unknown, p.dim, "checking…"),
-        ToolStatus::Conflict => (g.conflict, p.warn, "name conflict on PATH"),
-    };
     let how = match t.launch {
         Launch::Stream => "runs in a terminal",
         Launch::Gui => "desktop app",
@@ -534,13 +682,35 @@ fn render_tool_card(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         Launch::Web => "server + browser",
         Launch::Dataset => "wordlist data",
     };
+    let enter = if g.icons { "⏎" } else { "Enter" };
+    let state = match app.status[app.selected] {
+        ToolStatus::Installed => vec![
+            Span::styled(format!("{} ready", g.installed), th.fg(p.ok)),
+            Span::styled(" · ", th.fg(p.dim)),
+            Span::styled(enter, th.strong(p.accent)),
+            Span::styled(format!(" {how}"), th.fg(p.dim)),
+        ],
+        // an invitation, in neutral colours, with the key to press
+        ToolStatus::Missing => vec![
+            Span::styled(
+                format!("{} not installed · press ", g.missing),
+                th.fg(p.dim),
+            ),
+            Span::styled("i", th.strong(p.accent)),
+            Span::styled(" to install", th.fg(p.dim)),
+        ],
+        ToolStatus::Unknown => vec![Span::styled(
+            format!("{} checking…", g.unknown),
+            th.fg(p.dim),
+        )],
+        ToolStatus::Conflict => vec![Span::styled(
+            format!("{} name conflict on PATH", g.conflict),
+            th.fg(p.warn),
+        )],
+    };
     let lines = vec![
         Line::from(cats),
-        Line::from(vec![
-            Span::styled(format!("{icon} "), th.fg(color)),
-            Span::styled(state, th.fg(color)),
-            Span::styled(format!(" · {how}"), th.fg(p.dim)),
-        ]),
+        Line::from(state),
         Line::from(Span::styled(t.description.clone(), th.fg(p.fg))),
     ];
     let block = th
@@ -554,27 +724,33 @@ fn render_tool_card(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
     );
 }
 
-/// `0 console  1 nmap ⠋  2 ffuf ✓•  3 free  4 free`
+/// Browser-style tabs: `┌0 console┐ 1 nmap ⠋  2 ffuf ✓•  3 +  4 +`
 fn render_terminal_tabs(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
     let p = &th.pal;
     let g = th.glyph;
     let spin = g.spinner;
     let frame = spin[(app.tick / 2 % spin.len() as u64) as usize];
-    let mut spans = Vec::new();
+    let mut spans = vec![Span::raw(" ")];
     for pos in 0..=SLOTS {
         let sess = app.session(pos);
         let label = match sess {
-            Some(s) => format!(" {pos} {} ", s.title),
-            None => format!(" {pos} free "),
+            Some(s) => format!("{pos} {}", s.title),
+            None => format!("{pos} +"),
         };
-        let style = if pos == app.focus {
-            th.emph(Style::default().fg(p.ink).bg(p.accent))
-        } else if sess.is_some() {
-            th.fg(p.fg)
+        if pos == app.focus {
+            let mut on = th.strong(p.accent);
+            if th.mono {
+                on = on.add_modifier(Modifier::UNDERLINED);
+            }
+            spans.push(Span::styled(format!("{}{label}{}", g.tab_l, g.tab_r), on));
         } else {
-            th.fg(p.dim)
-        };
-        spans.push(Span::styled(label, style));
+            let style = if sess.is_some() {
+                th.fg(p.fg)
+            } else {
+                th.fg(p.dim)
+            };
+            spans.push(Span::styled(format!(" {label} "), style));
+        }
         if let Some(s) = sess {
             match s.state {
                 RunState::Running => spans.push(Span::styled(frame, th.fg(p.warn))),
@@ -622,17 +798,9 @@ fn render_session(f: &mut Frame, app: &App, th: &Theme, area: Rect, pos: usize, 
         let block = th
             .block(if grid && focused { p.accent } else { p.border })
             .title(Span::styled(format!(" {pos} free "), th.fg(p.dim)));
-        let text = vec![
-            Line::from(Span::styled(
-                "no tool here yet",
-                th.fg(p.dim).add_modifier(Modifier::ITALIC),
-            )),
-            Line::from(Span::styled(
-                "pick a tool on the left and press Enter",
-                th.fg(p.border),
-            )),
-        ];
-        f.render_widget(Paragraph::new(text).block(block), area);
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+        render_free_slot(f, th, inner, pos);
         return;
     };
 
@@ -791,7 +959,7 @@ fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             let mut spans = vec![
                 Span::styled(
                     format!(" all {SLOTS} terminals busy {arrow} "),
-                    th.emph(Style::default().fg(p.ink).bg(p.warn)),
+                    pill(th, p.warn),
                 ),
                 Span::raw(" "),
             ];
@@ -833,7 +1001,7 @@ fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
                 f.set_cursor_position((area.x + label_w + col as u16, area.y));
             }
             let mut spans = vec![
-                Span::styled(label, th.emph(Style::default().fg(p.ink).bg(p.warn))),
+                Span::styled(label, pill(th, p.warn)),
                 Span::raw(" "),
                 Span::styled(format!("{visible:<w$}", w = text_w as usize), th.fg(p.fg)),
             ];
@@ -845,16 +1013,14 @@ fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         Mode::Browsing => {
             let key = |k: &'static str| Span::styled(k, th.fg(p.accent));
             let sep = |d: &'static str| Span::styled(d, th.fg(p.dim));
+            // plain text: only a pending "press again" gets a solid label
+            let status = if app.confirm.is_some() {
+                Span::styled(format!(" {} ", app.status_line), pill(th, p.err))
+            } else {
+                Span::styled(format!(" {}", app.status_line), th.fg(p.fg))
+            };
             Line::from(vec![
-                Span::styled(
-                    format!(" {} ", app.status_line),
-                    // a pending "press again" stands out
-                    th.emph(Style::default().fg(p.ink).bg(if app.confirm.is_some() {
-                        p.err
-                    } else {
-                        p.accent
-                    })),
-                ),
+                status,
                 Span::raw("  "),
                 key("Enter"),
                 sep(" run · "),
@@ -876,6 +1042,129 @@ fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         }
     };
     f.render_widget(Paragraph::new(content), area);
+}
+
+/// The inside of a free terminal: a little terminal drawing and what to
+/// do next, or one line when the pane is small (grid cells).
+fn render_free_slot(f: &mut Frame, th: &Theme, inner: Rect, pos: usize) {
+    let p = &th.pal;
+    let fancy = th.glyph.icons;
+    let hint = if fancy {
+        "⏎ runs the selected tool here"
+    } else {
+        "Enter runs the selected tool here"
+    };
+    let art: [&str; 3] = if fancy {
+        ["╭──────────╮", "│ >_       │", "╰──────────╯"]
+    } else {
+        ["+----------+", "| >_       |", "+----------+"]
+    };
+    let mut lines: Vec<Line> = Vec::new();
+    let big = inner.height >= 7 && inner.width >= 36;
+    let body = if big { 6 } else { 1 };
+    for _ in 0..inner.height.saturating_sub(body) / 2 {
+        lines.push(Line::raw(""));
+    }
+    if big {
+        for a in art {
+            lines.push(Line::from(Span::styled(a, th.fg(p.border))));
+        }
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!("terminal {pos} is free"),
+            th.strong(p.fg),
+        )));
+        lines.push(Line::from(Span::styled(hint, th.fg(p.dim))));
+    } else {
+        lines.push(Line::from(Span::styled(
+            format!("{pos} · free · {hint}"),
+            th.fg(p.dim),
+        )));
+    }
+    f.render_widget(
+        Paragraph::new(lines)
+            .alignment(Alignment::Center)
+            .wrap(ratatui::widgets::Wrap { trim: true }),
+        inner,
+    );
+}
+
+/// Corner notifications, newest at the bottom, bottom-right of the body.
+fn render_toasts(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
+    let p = &th.pal;
+    let mut bottom = area.bottom();
+    for t in app.toasts.iter().rev() {
+        if bottom < area.y + 3 || area.width < 6 {
+            break;
+        }
+        let text = format!(" {} ", t.text);
+        let w = (Span::raw(text.as_str()).width() as u16 + 2).min(area.width);
+        bottom -= 3;
+        let r = Rect {
+            x: area.right().saturating_sub(w + 1).max(area.x),
+            y: bottom,
+            width: w,
+            height: 3,
+        };
+        let edge = match t.kind {
+            ToastKind::Ok => p.ok,
+            ToastKind::Err => p.err,
+            ToastKind::Info => p.info,
+        };
+        f.render_widget(Clear, r);
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(text, th.fg(p.fg)))).block(th.block(edge)),
+            r,
+        );
+    }
+}
+
+/// What each step of the welcome tour says.
+pub const TOUR: [&str; TOUR_STEPS] = [
+    "↑ ↓ move through the tools · ← → switch category",
+    "⏎ runs a tool in its own terminal · i installs it",
+    "/ filters · ? shows every key · t changes the look",
+];
+
+/// The first-run welcome card, always centered, on top of everything.
+fn render_tour(f: &mut Frame, th: &Theme, area: Rect, step: usize) {
+    let p = &th.pal;
+    let g = th.glyph;
+    let step = step.min(TOUR_STEPS - 1);
+    let text = TOUR[step];
+    let mut dots = Vec::new();
+    for i in 0..TOUR_STEPS {
+        if i > 0 {
+            dots.push(Span::raw(" "));
+        }
+        dots.push(if i == step {
+            Span::styled(g.installed, th.strong(p.accent))
+        } else {
+            Span::styled(g.missing, th.fg(p.dim))
+        });
+    }
+    let lines = vec![
+        Line::raw(""),
+        Line::from(Span::styled(text, th.strong(p.fg))),
+        Line::raw(""),
+        Line::from(dots),
+    ];
+    let hint = if step + 1 == TOUR_STEPS {
+        "⏎ let's go · ← back · Esc skip"
+    } else {
+        "⏎ next · ← back · Esc skip"
+    };
+    let w = (Span::raw(text).width() as u16 + 8).max(54);
+    dim_backdrop(f, th, area);
+    let card = centered(area, w, 8);
+    f.render_widget(Clear, card);
+    f.render_widget(
+        Paragraph::new(lines)
+            .alignment(Alignment::Center)
+            .wrap(ratatui::widgets::Wrap { trim: true })
+            .block(overlay_block(th, "welcome to winsploit", hint)),
+        card,
+    );
 }
 
 #[cfg(test)]
@@ -1085,7 +1374,7 @@ mod tests {
             "0 console",
             "1 nmap",
             "3 ffuf",
-            "4 free",
+            "4 +",
             "22/tcp open",
             "exit 0",
             "x close",
@@ -1123,6 +1412,86 @@ mod tests {
         a.mode = Mode::Browsing;
         a.confirm = Some(crate::app::Confirm::Quit);
         draw(&a, 100, 20);
+    }
+
+    #[test]
+    fn no_color_selection_is_reverse_video() {
+        let mut a = app();
+        a.mono = true;
+        let t = draw(&a, 140, 40);
+        let buf = t.backend().buffer();
+        // row 3 = first list row (header, categories, list border above it);
+        // x = 5 is inside the bar, past the glow on the left
+        assert!(
+            buf[(5, 3)].modifier.contains(Modifier::REVERSED),
+            "{}",
+            row(&t, 3)
+        );
+    }
+
+    #[test]
+    fn missing_tools_are_not_drawn_as_errors() {
+        let mut a = app();
+        a.status = vec![ToolStatus::Missing; a.tools.len()];
+        let err = crate::theme::Palette::of(a.settings.theme).err;
+        let t = draw(&a, 140, 40);
+        let buf = t.backend().buffer();
+        // the left pane: tool list and card
+        for y in 2..39 {
+            for x in 0..50 {
+                assert_ne!(buf[(x, y)].fg, err, "red at ({x},{y}): {}", row(&t, y));
+            }
+        }
+    }
+
+    #[test]
+    fn categories_get_their_own_row() {
+        let mut a = app();
+        let t = draw(&a, 140, 40);
+        assert!(row(&t, 1).contains("All 45"), "{}", row(&t, 1));
+        assert!(!row(&t, 1).contains("console"), "{}", row(&t, 1));
+        assert!(row(&t, 2).contains("console"), "{}", row(&t, 2));
+        // chips hidden on the right are flagged
+        let t = draw(&a, 80, 24);
+        assert!(row(&t, 1).trim_end().ends_with('›'), "{}", row(&t, 1));
+        // and on the left once scrolled to the end
+        a.cat = a.cat_tabs.len() - 1;
+        let t = draw(&a, 80, 24);
+        assert!(row(&t, 1).trim_start().starts_with('‹'), "{}", row(&t, 1));
+    }
+
+    #[test]
+    fn toasts_and_tour_render_at_any_size() {
+        let mut a = app();
+        a.toast(ToastKind::Ok, "✓ nmap finished in terminal 1");
+        a.toast(ToastKind::Err, "✗ ffuf exited 1");
+        let t = draw(&a, 140, 40);
+        let sc = screen(&t, 40);
+        assert!(
+            sc.contains("nmap finished") && sc.contains("ffuf exited"),
+            "{sc}"
+        );
+        for step in 0..TOUR_STEPS {
+            a.tour = Some(step);
+            let t = draw(&a, 140, 40);
+            assert!(screen(&t, 40).contains("welcome to winsploit"));
+        }
+        for (w, h) in [(80, 24), (40, 10), (10, 4)] {
+            draw(&a, w, h);
+        }
+    }
+
+    #[test]
+    fn long_rows_keep_their_badge_inside_the_pane() {
+        let mut a = app();
+        a.status = vec![ToolStatus::Missing; a.tools.len()];
+        let t = draw(&a, 140, 40);
+        // the left pane is 50 wide: its right border is at x = 49
+        for y in 4..30 {
+            let r: String = row(&t, y).chars().take(50).collect();
+            // the full badge is there, inside the border
+            assert!(r.contains("+ get ") && r.ends_with('│'), "row {y}: {r}");
+        }
     }
 
     #[test]

@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -23,7 +23,7 @@ use crate::install;
 use crate::registry::{self, Catalog, Install, Launch, Tool};
 use crate::runner::{self, AppEvent};
 use crate::scoop;
-use crate::session::{Session, CONSOLE, SLOTS};
+use crate::session::{RunState, Session, CONSOLE, SLOTS};
 use crate::theme::{Field, Settings};
 use crate::ui;
 
@@ -95,6 +95,27 @@ pub struct Appearance {
     pub saved: Settings,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ToastKind {
+    Ok,
+    Err,
+    Info,
+}
+
+/// A short note in the corner that fades on its own.
+pub struct Toast {
+    pub text: String,
+    pub kind: ToastKind,
+    pub born: Instant,
+}
+
+/// How long a toast stays up, and how many stack at once.
+pub const TOAST_LIFE: Duration = Duration::from_secs(4);
+pub const MAX_TOASTS: usize = 3;
+
+/// Steps of the first-run welcome tour.
+pub const TOUR_STEPS: usize = 3;
+
 #[derive(PartialEq, Eq)]
 enum Screen {
     Splash,
@@ -141,6 +162,12 @@ pub struct App {
     pub settings: Settings,
     /// The `t` appearance overlay, when open.
     pub appearance: Option<Appearance>,
+    /// Corner notifications, oldest first.
+    pub toasts: Vec<Toast>,
+    /// Step of the first-run welcome tour, while it's open.
+    pub tour: Option<usize>,
+    /// Colours are stripped (NO_COLOR); the renderer leans on modifiers.
+    pub mono: bool,
     /// A background detection pass is in flight.
     detecting: bool,
     /// The console is running a scoop install (so re-detect when it exits).
@@ -196,6 +223,9 @@ impl App {
             show_help: false,
             settings: Settings::default(),
             appearance: None,
+            toasts: Vec::new(),
+            tour: None,
+            mono: crate::theme::no_color(),
             detecting: false,
             installing: false,
             screen: Screen::Splash,
@@ -250,7 +280,12 @@ impl App {
             if event::poll(Duration::from_millis(80))? {
                 match event::read()? {
                     Event::Key(key) if key.kind == KeyEventKind::Press => match self.screen {
-                        Screen::Splash => self.screen = Screen::Main,
+                        Screen::Splash => {
+                            self.screen = Screen::Main;
+                            if !self.settings.tour_done {
+                                self.tour = Some(0);
+                            }
+                        }
                         Screen::Main => self.on_key(key),
                     },
                     // bracketed paste: the whole pasted text arrives at once
@@ -258,10 +293,60 @@ impl App {
                     _ => {}
                 }
             }
+            self.expire_toasts(Instant::now());
             self.tick = self.tick.wrapping_add(1);
         }
         self.kill_all();
         Ok(())
+    }
+
+    // --------------------------------------------------------------- toasts
+
+    pub fn toast(&mut self, kind: ToastKind, text: impl Into<String>) {
+        self.toasts.push(Toast {
+            text: text.into(),
+            kind,
+            born: Instant::now(),
+        });
+        if self.toasts.len() > MAX_TOASTS {
+            let extra = self.toasts.len() - MAX_TOASTS;
+            self.toasts.drain(0..extra);
+        }
+    }
+
+    pub fn expire_toasts(&mut self, now: Instant) {
+        self.toasts
+            .retain(|t| now.saturating_duration_since(t.born) < TOAST_LIFE);
+    }
+
+    // ----------------------------------------------------------------- tour
+
+    fn on_key_tour(&mut self, code: KeyCode) {
+        let Some(step) = self.tour else {
+            return;
+        };
+        match code {
+            KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') | KeyCode::Char('l') => {
+                if step + 1 >= TOUR_STEPS {
+                    self.finish_tour();
+                } else {
+                    self.tour = Some(step + 1);
+                }
+            }
+            KeyCode::Left | KeyCode::Char('h') => self.tour = Some(step.saturating_sub(1)),
+            KeyCode::Esc | KeyCode::Char('q') => self.finish_tour(),
+            _ => {}
+        }
+    }
+
+    /// Done or skipped: never show it again.
+    fn finish_tour(&mut self) {
+        self.tour = None;
+        self.settings.tour_done = true;
+        // tests must not write the real %APPDATA%
+        if !cfg!(test) {
+            let _ = self.settings.save();
+        }
     }
 
     // ------------------------------------------------------------ terminals
@@ -529,10 +614,23 @@ impl App {
                 if let Some(pos) = self.position_of(sid) {
                     let seen = self.on_screen(pos);
                     let focused = pos == self.focus;
+                    let mut note = None;
                     if let Some(s) = self.session_mut(pos) {
                         s.exited(code, seq);
                         s.unread |= !seen;
                         let title = s.title.clone();
+                        if pos > 0 {
+                            note = Some(if !s.failed() {
+                                (
+                                    ToastKind::Ok,
+                                    format!("✓ {title} finished in terminal {pos}"),
+                                )
+                            } else if let RunState::Exited(Some(c)) = s.state {
+                                (ToastKind::Err, format!("✗ {title} exited {c}"))
+                            } else {
+                                (ToastKind::Err, format!("✗ {title} stopped"))
+                            });
+                        }
                         if pos > 0 && !focused {
                             let how = match code {
                                 Some(c) => format!("exit {c}"),
@@ -542,6 +640,9 @@ impl App {
                                 format!("{title} finished in terminal {pos} ({how})");
                         }
                     }
+                    if let Some((kind, text)) = note {
+                        self.toast(kind, text);
+                    }
                     if focused && self.mode == Mode::StdinInput {
                         self.mode = Mode::Browsing;
                         self.editor.set("");
@@ -550,6 +651,11 @@ impl App {
                 // Only an install can change what's on PATH; a plain tool run
                 // doesn't need a re-probe.
                 if sid == CONSOLE && std::mem::take(&mut self.installing) {
+                    if code == Some(0) {
+                        self.toast(ToastKind::Ok, "✓ install finished · re-detecting");
+                    } else {
+                        self.toast(ToastKind::Err, "✗ install failed (see console)");
+                    }
                     self.detect_all(true);
                 }
             }
@@ -560,6 +666,10 @@ impl App {
     // ----------------------------------------------------------------- keys
 
     fn on_key(&mut self, key: KeyEvent) {
+        if self.tour.is_some() {
+            self.on_key_tour(key.code);
+            return;
+        }
         if self.appearance.is_some() {
             self.on_key_appearance(key.code);
             return;
@@ -606,7 +716,10 @@ impl App {
             KeyCode::Enter => {
                 self.appearance = None;
                 match self.settings.save() {
-                    Ok(path) => self.status_line = format!("appearance saved · {}", path.display()),
+                    Ok(path) => {
+                        self.status_line = format!("appearance saved · {}", path.display());
+                        self.toast(ToastKind::Info, "appearance saved");
+                    }
                     Err(e) => {
                         self.status_line = "appearance applied (not saved)".into();
                         self.console
@@ -1193,7 +1306,6 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::RunState;
 
     fn app() -> App {
         let cat = crate::registry::parse(include_str!("../tools.yaml")).unwrap();
@@ -1216,6 +1328,41 @@ mod tests {
         };
         s.ended = ended;
         app.slots[slot] = Some(s);
+    }
+
+    #[test]
+    fn toasts_cap_at_three_and_expire() {
+        let mut a = app();
+        for i in 0..4 {
+            a.toast(ToastKind::Info, format!("t{i}"));
+        }
+        assert_eq!(a.toasts.len(), MAX_TOASTS);
+        assert_eq!(a.toasts[0].text, "t1"); // the oldest went first
+        let later = a.toasts[2].born + Duration::from_secs(5);
+        a.expire_toasts(later);
+        assert!(a.toasts.is_empty());
+    }
+
+    #[test]
+    fn tour_steps_back_and_skips() {
+        let mut a = app();
+        a.tour = Some(0);
+        a.on_key(key(KeyCode::Enter));
+        assert_eq!(a.tour, Some(1));
+        // the tour eats keys: this doesn't move the list
+        let sel = a.selected;
+        a.on_key(key(KeyCode::Down));
+        assert_eq!(a.selected, sel);
+        a.on_key(key(KeyCode::Left));
+        assert_eq!(a.tour, Some(0));
+        a.on_key(key(KeyCode::Esc));
+        assert_eq!(a.tour, None);
+        assert!(a.settings.tour_done);
+        // walking off the last step finishes it too
+        a.tour = Some(TOUR_STEPS - 1);
+        a.settings.tour_done = false;
+        a.on_key(key(KeyCode::Enter));
+        assert!(a.tour.is_none() && a.settings.tour_done);
     }
 
     fn tab(a: &App, label: &str) -> usize {

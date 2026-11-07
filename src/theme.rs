@@ -102,6 +102,8 @@ pub struct Settings {
     pub bold: bool,
     pub overlay: OverlayPos,
     pub backdrop: Backdrop,
+    /// the first-run welcome tour was finished or skipped
+    pub tour_done: bool,
 }
 
 impl Default for Settings {
@@ -113,6 +115,7 @@ impl Default for Settings {
             bold: true,
             overlay: OverlayPos::default(),
             backdrop: Backdrop::default(),
+            tour_done: false,
         }
     }
 }
@@ -260,8 +263,15 @@ impl Settings {
             bold: self.bold,
             overlay: self.overlay,
             backdrop: self.backdrop,
+            mono: no_color(),
         }
     }
+}
+
+/// `NO_COLOR` set to anything non-empty: crossterm then drops every colour,
+/// backgrounds included, so state must also show through modifiers.
+pub fn no_color() -> bool {
+    std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
 }
 
 // ---------------------------------------------------------------- palettes
@@ -400,6 +410,17 @@ pub struct Glyphs {
     pub failed: &'static str,
     /// terminal tab: new output you haven't looked at
     pub unread: &'static str,
+    /// the fade on either side of the selected row's bar
+    pub glow_l: &'static str,
+    pub glow_r: &'static str,
+    /// around the terminal tab in front
+    pub tab_l: &'static str,
+    pub tab_r: &'static str,
+    /// more chips hidden off the edge of the category bar
+    pub more_l: &'static str,
+    pub more_r: &'static str,
+    /// emoji category icons and the header bolt
+    pub icons: bool,
 }
 
 pub static UNICODE: Glyphs = Glyphs {
@@ -415,6 +436,13 @@ pub static UNICODE: Glyphs = Glyphs {
     done: "✓",
     failed: "✗",
     unread: "•",
+    glow_l: "░▒▓",
+    glow_r: "▓▒░",
+    tab_l: "┌",
+    tab_r: "┐",
+    more_l: "‹",
+    more_r: "›",
+    icons: true,
 };
 
 pub static ASCII: Glyphs = Glyphs {
@@ -430,6 +458,13 @@ pub static ASCII: Glyphs = Glyphs {
     done: "+",
     failed: "x",
     unread: "!",
+    glow_l: "  >",
+    glow_r: "<  ",
+    tab_l: "[",
+    tab_r: "]",
+    more_l: "<",
+    more_r: ">",
+    icons: false,
 };
 
 const ASCII_BORDER: border::Set = border::Set {
@@ -453,6 +488,8 @@ pub struct Theme {
     pub bold: bool,
     pub overlay: OverlayPos,
     pub backdrop: Backdrop,
+    /// colours are stripped (NO_COLOR): selection falls back to reverse video
+    pub mono: bool,
 }
 
 impl Default for Theme {
@@ -473,6 +510,16 @@ impl Theme {
             s.add_modifier(Modifier::BOLD)
         } else {
             s
+        }
+    }
+
+    /// The one solid "you are here" bar. Reverse video when colours are
+    /// stripped, since an accent background would simply vanish.
+    pub fn selected(&self) -> Style {
+        if self.mono {
+            Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
+        } else {
+            self.emph(Style::default().fg(self.pal.ink).bg(self.pal.accent))
         }
     }
 
