@@ -1,6 +1,7 @@
 //! Application state and the main event loop.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
@@ -11,7 +12,7 @@ use ratatui::DefaultTerminal;
 use crate::args;
 use crate::banner;
 use crate::detect;
-use crate::registry::{Catalog, Tool};
+use crate::registry::{self, Catalog, Tool};
 use crate::runner::{self, AppEvent};
 use crate::scoop;
 use crate::ui;
@@ -54,19 +55,28 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(catalog: Catalog) -> Self {
+    pub fn new(catalog: Catalog, catalog_path: PathBuf) -> Self {
         let Catalog { tools, buckets } = catalog;
         let (tx, rx) = mpsc::channel();
         let n = tools.len();
+        let mut output = vec![
+            ":: nasrya ready. tools above; output appears here.".into(),
+            ":: Enter runs the highlighted tool · i installs it via scoop.".into(),
+            format!(":: catalog: {}", catalog_path.display()),
+        ];
+        if let Some(ignored) = registry::ignored_cwd_catalog(&catalog_path) {
+            output.push(format!(
+                "[err] ignored {} — catalogs aren't loaded from the current directory \
+                 unless you pass --catalog",
+                ignored.display()
+            ));
+        }
         App {
             tools,
             buckets,
             status: vec![ToolStatus::Unknown; n],
             selected: 0,
-            output: vec![
-                ":: nasrya ready. tools above; output appears here.".into(),
-                ":: Enter runs the highlighted tool · i installs it via scoop.".into(),
-            ],
+            output,
             mode: Mode::Browsing,
             input: String::new(),
             running: false,

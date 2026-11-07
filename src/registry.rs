@@ -38,22 +38,74 @@ pub struct Catalog {
     pub buckets: BTreeMap<String, String>,
 }
 
-/// Find `tools.yaml`: prefer the current directory, then fall back to the
-/// directory containing the executable (so a shipped binary finds its catalog).
-pub fn registry_path() -> PathBuf {
-    let cwd = Path::new("tools.yaml");
-    if cwd.exists() {
-        return cwd.to_path_buf();
+/// Where to look for `tools.yaml`, in priority order.
+///
+/// The catalog decides which commands Enter runs, so it is **never** taken
+/// implicitly from the current directory: nasrya is routinely started inside
+/// untrusted folders (challenge files, loot, cloned repos), and a planted
+/// `tools.yaml` there could point `nmap` at anything. To use one on purpose,
+/// pass `--catalog .\tools.yaml` or set `NASRYA_CATALOG`.
+pub fn catalog_candidates(explicit: Option<&Path>) -> Vec<PathBuf> {
+    if let Some(p) = explicit {
+        return vec![p.to_path_buf()];
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let p = dir.join("tools.yaml");
-            if p.exists() {
-                return p;
+    if let Some(p) = std::env::var_os("NASRYA_CATALOG") {
+        return vec![PathBuf::from(p)];
+    }
+    let mut out = Vec::new();
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(Path::to_path_buf))
+    {
+        // shipped layout: tools.yaml next to nasrya.exe
+        out.push(dir.join("tools.yaml"));
+        // dev layout: target\{debug,release}\nasrya.exe inside the nasrya
+        // checkout. That's the binary's own source tree, not wherever the
+        // user happens to be.
+        for root in dir.ancestors().skip(1).take(3) {
+            if is_nasrya_checkout(root) {
+                out.push(root.join("tools.yaml"));
+                break;
             }
         }
     }
-    cwd.to_path_buf()
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        out.push(PathBuf::from(appdata).join("nasrya").join("tools.yaml"));
+    }
+    out
+}
+
+fn is_nasrya_checkout(dir: &Path) -> bool {
+    fs::read_to_string(dir.join("Cargo.toml"))
+        .map(|t| t.lines().any(|l| l.trim() == r#"name = "nasrya""#))
+        .unwrap_or(false)
+}
+
+/// Resolve the catalog path: the first candidate that exists.
+pub fn find_catalog(explicit: Option<&Path>) -> Result<PathBuf> {
+    let cands = catalog_candidates(explicit);
+    if let Some(p) = cands.iter().find(|p| p.is_file()) {
+        return Ok(p.clone());
+    }
+    let tried: Vec<String> = cands.iter().map(|p| format!("  {}", p.display())).collect();
+    anyhow::bail!(
+        "no tools.yaml found. Looked in:\n{}\n(use --catalog <path> to point at one)",
+        tried.join("\n")
+    )
+}
+
+/// If there is a `tools.yaml` in the current directory that we are *not*
+/// using, return its path so the UI can say it was ignored.
+pub fn ignored_cwd_catalog(active: &Path) -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?.join("tools.yaml");
+    if !cwd.is_file() {
+        return None;
+    }
+    let same = match (fs::canonicalize(&cwd), fs::canonicalize(active)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    };
+    (!same).then_some(cwd)
 }
 
 pub fn load(path: impl AsRef<Path>) -> Result<Catalog> {

@@ -81,7 +81,7 @@ git clone https://github.com/tahabenissa/nasrya-toolbox
 cd nasrya-toolbox
 cargo build --release
 
-# 3. Run it (from the repo root, so it finds tools.yaml)
+# 3. Run it (a dev build finds the checkout's tools.yaml from any directory)
 .\target\release\nasrya
 ```
 
@@ -103,7 +103,16 @@ nasrya              launch the interactive dashboard
 nasrya list         list the tool catalog with install status
 nasrya --help       show help
 nasrya --version    show version
+
+--catalog <path>    use a specific tools.yaml (works with or without `list`)
 ```
+
+**Which `tools.yaml` is used?** In order: `--catalog <path>`, then `%NASRYA_CATALOG%`, then the
+one next to `nasrya.exe`, then the source checkout (dev builds), then
+`%APPDATA%\nasrya\tools.yaml`. The catalog decides what Enter runs, so nasrya **never** picks
+up a `tools.yaml` from the current directory on its own. You'll often run it inside untrusted
+folders (challenge files, loot, cloned repos). If one is there, nasrya says it was ignored;
+pass `--catalog .\tools.yaml` to use it on purpose. The active path is shown in the dashboard.
 
 **Dashboard keys**
 
