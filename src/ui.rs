@@ -328,6 +328,22 @@ fn render_lan_panel(f: &mut Frame, app: &App, cur: usize, th: &Theme, area: Rect
         None => key.push(Span::styled("none", th.fg(pal.dim))),
     }
     lines.push(Line::from(key));
+    let mut fw = vec![label("firewall")];
+    match app.fw_port {
+        Some(p) => {
+            fw.push(Span::styled(
+                format!("{} open", crate::firewall::rule_name(p)),
+                th.fg(pal.ok),
+            ));
+            fw.push(Span::styled("  c closes it", th.fg(pal.dim)));
+        }
+        None if app.fw_note.is_empty() => fw.push(Span::styled("no rule open", th.fg(pal.dim))),
+        None => fw.push(Span::styled(
+            "not managed (see the console)",
+            th.fg(pal.warn),
+        )),
+    }
+    lines.push(Line::from(fw));
     lines.push(Line::raw(""));
 
     let guests = &app.lan_guests;
