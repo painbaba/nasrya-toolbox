@@ -737,8 +737,9 @@ dialog p.fp code { font-size: 0.8214rem; color: var(--muted); }
 .request-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .request .guest { border: 0; padding: 0; background: transparent; }
 
-/* a watcher sees everything, and no control that would only be refused */
-body[data-role="watch"] [data-action],
+/* a watcher sees everything, and no control that would only be refused
+   (copying stays: it only uses the browser's own clipboard) */
+body[data-role="watch"] [data-action]:not([data-action="copy"]),
 body[data-role="watch"] #open-hash,
 body[data-role="watch"] #run-form,
 body[data-role="watch"] #args-hint,

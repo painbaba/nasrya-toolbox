@@ -71,6 +71,10 @@ pub enum Action {
     Remove(u64),
     /// LAN view: a new one-time join key.
     NewKey,
+    /// Copy this terminal's output to the clipboard (only the lines that
+    /// match the find, while one is active there). Terminal only: the web
+    /// page copies into the browser's own clipboard.
+    Copy(usize),
 }
 
 // kind() and BINDINGS exist for the parity test (and as the checklist above)
@@ -90,6 +94,7 @@ impl Action {
             Action::Admit(..) => "admit",
             Action::Remove(_) => "remove",
             Action::NewKey => "newkey",
+            Action::Copy(_) => "copy",
         }
     }
 
@@ -109,6 +114,7 @@ impl Action {
         ("admit", "L"),
         ("remove", "L"),
         ("newkey", "L"),
+        ("copy", "y"),
     ];
 }
 
@@ -253,6 +259,8 @@ pub enum Hit {
     Key(KeyCode),
     /// the "press again" prompt in the footer: clicking it confirms
     Confirm,
+    /// the copy button on terminal `pos`'s title bar
+    Copy(usize),
     /// an open overlay's box
     Popup(Layer),
     /// entry `n` of an overlay's list
@@ -1776,6 +1784,60 @@ impl App {
             Action::Admit(id, role) => self.admit_guest(id, role),
             Action::Remove(id) => self.remove_guest(id),
             Action::NewKey => self.new_join_key(),
+            // a browser never writes this machine's clipboard
+            Action::Copy(_) if src.is_web() => {}
+            Action::Copy(pos) => self.copy_output(pos),
+        }
+    }
+
+    /// What `y` copies from terminal `pos`: its whole output, or only the
+    /// lines matching the find while one is active there. (text, lines,
+    /// the find text when only matches were taken)
+    fn output_to_copy(&self, pos: usize) -> Option<(String, usize, Option<String>)> {
+        let s = self.session(pos)?;
+        let needle = self.search.trim().to_lowercase();
+        let only = (!needle.is_empty() && s.search_hit.is_some()).then(|| self.search.trim());
+        let lines: Vec<&str> = s
+            .output
+            .iter()
+            .map(String::as_str)
+            .filter(|l| only.is_none() || l.to_lowercase().contains(&needle))
+            .collect();
+        (!lines.is_empty()).then(|| (lines.join("\r\n"), lines.len(), only.map(str::to_string)))
+    }
+
+    /// `y` (or the copy button): put terminal `pos`'s output on the
+    /// clipboard and say what was copied.
+    fn copy_output(&mut self, pos: usize) {
+        let Some((text, n, only)) = self.output_to_copy(pos) else {
+            self.status_line = "nothing to copy in this terminal".into();
+            return;
+        };
+        let from = match self.session(pos) {
+            Some(s) if pos > 0 => format!("terminal {pos} ({})", s.title),
+            _ => "the console".into(),
+        };
+        let what = format!(
+            "{n} line{}{}",
+            if n == 1 { "" } else { "s" },
+            only.map(|f| format!(" matching '{f}'")).unwrap_or_default()
+        );
+        // tests must not touch the real clipboard
+        let copied = if cfg!(test) {
+            Ok(())
+        } else {
+            runner::copy_to_clipboard(&text)
+        };
+        match copied {
+            Ok(()) => {
+                let msg = format!("copied {what} from {from}");
+                self.status_line = msg.clone();
+                self.toast(ToastKind::Ok, msg);
+            }
+            Err(e) => {
+                self.status_line = format!("couldn't copy: {e}");
+                self.toast(ToastKind::Err, format!("couldn't copy {from}: {e}"));
+            }
         }
     }
 
@@ -2163,6 +2225,7 @@ impl App {
                         "no flags yet · they're caught from tool output automatically".into();
                 }
             }
+            KeyCode::Char('y') => self.apply(Action::Copy(self.focus), Source::Terminal),
             KeyCode::Char('n') => self.find_next(true),
             KeyCode::Char('N') => self.find_next(false),
             KeyCode::Char('/') => {
@@ -3378,6 +3441,7 @@ impl App {
                 self.step_category(0);
             }
             Some(Hit::Term(pos)) if pos != self.focus => self.set_focus(pos),
+            Some(Hit::Copy(pos)) => self.apply(Action::Copy(pos), Source::Terminal),
             _ => {}
         }
     }
@@ -3486,7 +3550,7 @@ impl App {
                 }
                 return;
             }
-            Some(Hit::Term(pos)) => pos,
+            Some(Hit::Term(pos) | Hit::Copy(pos)) => pos,
             _ => self.focus,
         };
         if let Some(s) = self.session_mut(pos) {
@@ -4263,6 +4327,7 @@ mod tests {
             Action::Admit(1, Role::Watch),
             Action::Remove(1),
             Action::NewKey,
+            Action::Copy(1),
         ];
         assert_eq!(every.len(), Action::BINDINGS.len());
         for a in &every {
@@ -4741,5 +4806,64 @@ mod tests {
         click(&mut a, spot(&t, "yes, close", 39..40));
         assert!(a.slots[0].is_none());
         assert!(a.confirm.is_none());
+    }
+
+    // ----------------------------------------------------------------- copy
+
+    #[test]
+    fn y_copies_the_shown_terminal() {
+        let mut a = app();
+        fake(&mut a, 1, "nmap", false, 1);
+        for l in ["22/tcp open ssh", "25/tcp closed smtp", "80/tcp open http"] {
+            a.slots[1].as_mut().unwrap().push(l);
+        }
+        a.set_focus(2);
+        a.press(KeyCode::Char('y'));
+        assert_eq!(a.status_line, "copied 3 lines from terminal 2 (nmap)");
+        assert!(a.toasts.iter().any(|t| t.text == a.status_line));
+        let (text, n, only) = a.output_to_copy(2).unwrap();
+        assert_eq!((n, only), (3, None));
+        assert_eq!(
+            text,
+            "22/tcp open ssh\r\n25/tcp closed smtp\r\n80/tcp open http"
+        );
+        // with a find active there, only the matching lines
+        a.search = "OPEN".into();
+        a.find_next(true);
+        a.press(KeyCode::Char('y'));
+        assert_eq!(
+            a.status_line,
+            "copied 2 lines matching 'OPEN' from terminal 2 (nmap)"
+        );
+        // the console, and an empty terminal
+        a.console.output.clear();
+        a.console.push(":: hi");
+        a.apply(Action::Copy(0), Source::Terminal);
+        assert_eq!(a.status_line, "copied 1 line from the console");
+        a.apply(Action::Copy(4), Source::Terminal);
+        assert_eq!(a.status_line, "nothing to copy in this terminal");
+        // a browser never writes this machine's clipboard
+        a.status_line.clear();
+        a.apply(Action::Copy(2), Source::Web(Caller::Owner));
+        assert!(a.status_line.is_empty());
+    }
+
+    #[test]
+    fn the_title_bar_copy_button_copies() {
+        let mut a = app();
+        fake(&mut a, 0, "ffuf", false, 1);
+        a.slots[0].as_mut().unwrap().push("admin [Status: 200]");
+        a.set_focus(1);
+        let t = paint(&a, 160, 40);
+        click(&mut a, spot(&t, "y copy", 2..4));
+        assert_eq!(a.status_line, "copied 1 line from terminal 1 (ffuf)");
+        // in the grid each pane has its own
+        fake(&mut a, 3, "nmap", false, 2);
+        a.slots[3].as_mut().unwrap().push("22/tcp open");
+        a.grid = true;
+        let t = paint(&a, 160, 40);
+        let (_, y) = spot(&t, "4 nmap", 20..40);
+        click(&mut a, spot(&t, "y copy", y..y + 1));
+        assert_eq!(a.status_line, "copied 1 line from terminal 4 (nmap)");
     }
 }

@@ -149,6 +149,7 @@ pub const HELP: &[HelpGroup] = &[
         rows: &[
             ("PgUp PgDn", "scroll the terminal · Home top · End follow"),
             ("f  n  N", "find in the output · older / newer match"),
+            ("y", "copy the shown terminal's output (only the find matches, after f)"),
         ],
     },
     HelpGroup {
@@ -1602,7 +1603,21 @@ fn render_session(f: &mut Frame, app: &App, th: &Theme, area: Rect, pos: usize, 
         p.border
     };
     let bottom_w = bottom.width() as u16;
+    let title_w: u16 = title.iter().map(|s| s.width() as u16).sum();
     let mut block = th.block(border).title(title).title_bottom(bottom);
+    // top right: a copy button (the y key), where the title leaves room
+    const COPY: &str = " y copy ";
+    let copy_w = COPY.len() as u16;
+    let copy = !s.output.is_empty() && area.width >= title_w + copy_w + 3;
+    if copy {
+        block = block.title(
+            Line::from(vec![
+                Span::styled(" y", th.strong(p.accent)),
+                Span::styled(" copy ", th.fg(p.dim)),
+            ])
+            .alignment(Alignment::Right),
+        );
+    }
     // bottom right: key hints, each one clickable
     let mut keys: &[(&str, char)] = &[];
     if focused && pos > 0 && !grid {
@@ -1616,6 +1631,10 @@ fn render_session(f: &mut Frame, app: &App, th: &Theme, area: Rect, pos: usize, 
             .title_bottom(Line::from(Span::styled(hint, th.fg(p.dim))).alignment(Alignment::Right));
     }
     f.render_widget(Paragraph::new(text).block(block), area);
+    if copy {
+        let r = Rect::new(area.right() - 1 - copy_w, area.y, copy_w, 1);
+        hit(app, r, Hit::Copy(pos));
+    }
     let hint_w: u16 = keys.iter().map(|k| k.0.chars().count() as u16).sum();
     // only where the state on the left doesn't cover them
     if hint_w > 0 && area.height >= 2 && area.width >= bottom_w + hint_w + 3 {
