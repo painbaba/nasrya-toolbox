@@ -66,3 +66,11 @@ tools:
     run_cmd: ffuf
     args_hint: "-V"
     bucket: security
+
+  - name: gobuster
+    category: recon
+    description: Directory / DNS / vhost brute-forcer
+    exe: gobuster
+    scoop: gobuster
+    run_cmd: gobuster
+    args_hint: "dir -u https://example.com -w wordlist.txt"
