@@ -91,3 +91,12 @@ tools:
     run_cmd: httpx
     args_hint: "-u https://example.com -title -status-code"
     bucket: security
+
+  - name: subfinder
+    category: recon
+    description: Passive subdomain enumeration
+    exe: subfinder
+    scoop: subfinder
+    run_cmd: subfinder
+    args_hint: "-d example.com"
+    bucket: security
