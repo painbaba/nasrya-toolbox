@@ -404,3 +404,12 @@ tools:
     run_cmd: ""
     launch: web
     url: '{scoop_app}\CyberChef.html'
+
+  - name: gau
+    category: recon
+    description: Fetch known URLs from web archives (getallurls)
+    exe: gau
+    scoop: gau
+    bucket: nasrya
+    run_cmd: gau
+    args_hint: "--subs example.com"
