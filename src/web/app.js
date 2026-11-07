@@ -1371,6 +1371,17 @@ function renderCard() {
   } else if (t.launch === 'dataset') {
     hint.textContent = 'Lists the files in the console and copies the folder path on the machine running winsploit.';
   }
+  // where it will run: the terminal's working folder (read-only here)
+  const cwdEl = $('t-cwd');
+  const cwd = S.st && S.st.cwd;
+  cwdEl.hidden = !cwd || !(t.launch === 'stream' || t.launch === 'gui');
+  if (!cwdEl.hidden) {
+    const code = document.createElement('code');
+    code.textContent = cwd;
+    const key = document.createElement('kbd');
+    key.textContent = 'd';
+    cwdEl.replaceChildren('Runs in ', code, ' · ', key, ' in the terminal changes it');
+  }
 
   const run = $('run-btn');
   run.textContent = verb;

@@ -165,6 +165,7 @@ pub const HELP: &[HelpGroup] = &[
         "flags caught in tool output: list, Enter copies (each is also copied and saved)",
     ),
             ("h", "identify a hash (built in)"),
+            ("d", "working folder (where tools run), like cd"),
         ],
     },
     HelpGroup {
@@ -1436,11 +1437,24 @@ fn render_tool_card(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             state.push(Span::styled(" sandbox (recommended)", th.fg(p.warn)));
         }
     }
-    let lines = vec![
-        Line::from(cats),
-        Line::from(state),
-        Line::from(Span::styled(t.description.clone(), th.fg(p.fg))),
-    ];
+    let mut lines = vec![Line::from(cats), Line::from(state)];
+    // where it runs (the working folder), for tools that start a process
+    // here; above the description, which may wrap, and shortened from the
+    // left so it never wraps out of the panel itself
+    if matches!(t.launch, Launch::Stream | Launch::Gui) {
+        let room = (area.width as usize).saturating_sub(2 + "in ".len() + " · d change".len());
+        lines.push(Line::from(vec![
+            Span::styled("in ", th.fg(p.dim)),
+            Span::styled(
+                crate::folder::fit(&crate::folder::short(&app.cwd), room.max(8)),
+                th.fg(p.info),
+            ),
+            Span::styled(" · ", th.fg(p.dim)),
+            Span::styled("d", th.strong(p.accent)),
+            Span::styled(" change", th.fg(p.dim)),
+        ]));
+    }
+    lines.push(Line::from(Span::styled(t.description.clone(), th.fg(p.fg))));
     let block = th
         .block(p.border)
         .title(Span::styled(format!(" {} ", t.name), th.strong(p.fg)));
@@ -1811,9 +1825,12 @@ fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         | Mode::Filter
         | Mode::Search
         | Mode::SandboxInput
+        | Mode::FolderInput
         | Mode::Challenge(_)
         | Mode::Recipe(_) => {
             let net_help;
+            let folder_help;
+            let args_help;
             let (name, help) = match app.mode {
                 Mode::Recipe(crate::recipe::Slot::Target) => (
                     "target",
@@ -1849,6 +1866,20 @@ fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
                     );
                     ("sandbox", net_help.as_str())
                 }
+                Mode::FolderInput => {
+                    // cycling through Tab matches: which one is shown
+                    let tab = match &app.folder_tab {
+                        Some((_, m, i)) => {
+                            format!("{}/{} Tab next · Shift+Tab back", i + 1, m.len())
+                        }
+                        None => "Tab completes · .. ~ -".to_string(),
+                    };
+                    folder_help = format!(
+                        "  now {} · {tab} · Enter go · Esc cancel",
+                        crate::folder::fit(&crate::folder::short(&app.cwd), 32)
+                    );
+                    ("folder", folder_help.as_str())
+                }
                 Mode::HashInput => ("hash", "  Enter identify · Esc cancel"),
                 Mode::StdinInput => ("stdin", "  Enter send · Ctrl+D end input · Esc close"),
                 Mode::Filter => (
@@ -1856,7 +1887,14 @@ fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
                     "  name / category / text · Enter keep · Esc clear",
                 ),
                 Mode::Search => ("find", "  Enter find in output · then n / N · Esc cancel"),
-                _ => ("args", "  Enter run · ↑↓ history · Esc cancel"),
+                _ => {
+                    // say where it will run, like a shell prompt
+                    args_help = format!(
+                        "  in {} · Enter run · ↑↓ history · Esc cancel",
+                        crate::folder::fit(&crate::folder::short(&app.cwd), 32)
+                    );
+                    ("args", args_help.as_str())
+                }
             };
             let label = format!(" {name} {arrow} ");
             let label_w = label.chars().count() as u16 + 1; // + the space after it

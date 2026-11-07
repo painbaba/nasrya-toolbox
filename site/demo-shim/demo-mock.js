@@ -93,6 +93,8 @@
       viewers: 1,
       lan: false,
       challenge: S.challenge,
+      // the real app works in the active challenge's folder
+      cwd: S.challenge ? `~\\ctf\\${S.challenge.id.replace('/', '\\')}` : '~',
       challenges: CHALLENGES.map((c) => ({ id: c.id, title: `${c.event} / ${c.name}` })),
       recipes: recipesJson(),
       flags: [],

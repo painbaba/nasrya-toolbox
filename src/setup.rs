@@ -44,7 +44,7 @@ pub fn plan(
 
 pub fn run(catalog: &Catalog, buckets: bool, pipx: bool) -> Result<()> {
     if !buckets && !pipx {
-        bail!("usage: winsploit setup [--buckets] [--pipx]");
+        bail!("usage: winsploit setup [--buckets] [--pipx] [--path]");
     }
     // The installer may have just put Scoop on the persisted PATH.
     crate::envpath::refresh();
