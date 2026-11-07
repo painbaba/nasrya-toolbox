@@ -226,3 +226,12 @@ tools:
     run_cmd: wfuzz
     args_hint: "-c -z file,wordlist.txt --hc 404 https://example.com/FUZZ"
     note: wfuzz depends on pycurl and was last released in 2020; if the install fails on a new Python, ffuf or feroxbuster cover the same ground
+
+  - name: commix
+    category: web
+    description: Automated command-injection exploiter
+    exe: commix
+    install: pipx
+    pipx: git+https://github.com/commixproject/commix
+    run_cmd: commix
+    args_hint: "--url=https://example.com/?addr=127.0.0.1 --batch"
