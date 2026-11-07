@@ -57,12 +57,31 @@
   <button type="button" class="icon-btn" id="open-help" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 17h.01"/></svg>
   </button>
+  <button type="button" class="icon-btn" id="open-looks" title="Colors and theme (p)" aria-label="Colors and theme" aria-haspopup="dialog" aria-expanded="false" aria-controls="looks-menu">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 0 0 0 18c1.2 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.7 1.8-1.7H17a4.5 4.5 0 0 0 4-4.5C21 6.5 17 3 12 3z"/><circle class="dots" cx="7.5" cy="11.5" r="1.4"/><circle class="dots" cx="10.5" cy="7.5" r="1.4"/><circle class="dots" cx="15" cy="7.8" r="1.4"/></svg>
+  </button>
   <button type="button" class="icon-btn" id="theme-toggle" title="Theme: auto" aria-label="Switch theme">
     <svg class="i-auto" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4v16a8 8 0 0 0 0-16z" class="fill"/></svg>
     <svg class="i-light" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
     <svg class="i-dark" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></svg>
   </button>
 </header>
+
+<div class="looks" id="looks-menu" role="dialog" aria-label="Colors and theme" hidden>
+  <div class="looks-head">
+    <b>Colors<small id="looks-name"></small></b>
+    <div class="seg" role="radiogroup" aria-label="Theme">
+      <label><input type="radio" name="looks-theme" value="auto"><span>Auto</span></label>
+      <label><input type="radio" name="looks-theme" value="light"><span>Light</span></label>
+      <label><input type="radio" name="looks-theme" value="dark"><span>Dark</span></label>
+    </div>
+  </div>
+  <div class="looks-grid" id="looks-grid" role="radiogroup" aria-label="Color palette"></div>
+  <div class="looks-foot">
+    <label><input type="checkbox" class="switch" id="looks-cats">Colored category titles</label>
+    <button type="button" class="btn sm ghost" id="looks-more">All settings…</button>
+  </div>
+</div>
 
 <div class="layout">
   <aside class="sidebar" id="sidebar">
@@ -175,6 +194,7 @@
     <dt><kbd>Enter</kbd></dt><dd>edit the arguments, then run</dd>
     <dt><kbd>Ctrl</kbd>+<kbd>Space</kbd> <kbd>Tab</kbd></dt><dd>in the arguments: suggestions (flags, recipes, history, challenge files), insert one</dd>
     <dt><kbd>b</kbd></dt><dd>show or hide the tool list</dd>
+    <dt><kbd>p</kbd></dt><dd>colors: pick a palette, light or dark</dd>
     <dt><kbd>,</kbd></dt><dd>settings</dd>
     <dt><kbd>0</kbd>–<kbd>4</kbd></dt><dd>show the console or terminal 1–4</dd>
     <dt><kbd>g</kbd></dt><dd>grid: all four terminals at once</dd>

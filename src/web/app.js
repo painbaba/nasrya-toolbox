@@ -78,10 +78,12 @@ function setTheme(v) {
   store.set('ws-theme', theme);
   applyTheme();
   if ($('settings-dialog').open) renderSettingsForm();
+  if (!$('looks-menu').hidden) renderLooks();
 }
 $('theme-toggle').addEventListener('click', () => setTheme({ auto: 'light', light: 'dark', dark: 'auto' }[theme] || 'auto'));
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if ($('settings-dialog').open) renderSettingsForm();
+  if (!$('looks-menu').hidden) renderLooks();
 });
 
 // -------------------------------------------------------- notifications
@@ -116,9 +118,11 @@ const loadJSON = (k, fallback) => {
 // ------------------------------------------------------------- settings
 // Page-local (this browser only), like the theme. Nothing goes to winsploit.
 
-// Palettes: a few numbers each (see the top of app.css). The ids match the
-// design options P1..P10.
+// Palettes: a few numbers each (see the top of app.css). Frost is the
+// default; app.css starts with the same numbers so the page paints in it
+// before this script runs.
 const PALETTES = [
+  { id: 'frost', name: 'Frost', h: 220, s: '17%', ah: 193, as: '45%', al: '68%', ll: '38%', lift: '13%' },
   { id: 'classic', name: 'Terracotta', h: 25, s: '10%', ah: 15, as: '62%', al: '62%', ll: '50%' },
   { id: 'ice', name: 'Ice', h: 212, s: '24%', ah: 189, as: '85%', al: '55%', ll: '36%' },
   { id: 'phosphor', name: 'Phosphor', h: 150, s: '14%', ah: 146, as: '62%', al: '55%', ll: '33%' },
@@ -128,7 +132,6 @@ const PALETTES = [
   { id: 'amber', name: 'Amber CRT', h: 38, s: '16%', ah: 38, as: '95%', al: '56%', ll: '36%' },
   { id: 'deepsea', name: 'Deep sea', h: 192, s: '30%', ah: 170, as: '70%', al: '50%', ll: '30%' },
   { id: 'graphite', name: 'Graphite', h: 0, s: '0%', ah: 82, as: '75%', al: '55%', ll: '32%' },
-  { id: 'frost', name: 'Frost', h: 220, s: '17%', ah: 193, as: '45%', al: '68%', ll: '38%', lift: '13%' },
 ];
 
 // one hue per category for its title in the tool list (same in every palette)
@@ -144,14 +147,28 @@ function catHue(id) {
 }
 
 const DEFAULTS = {
-  palette: 'classic', catColors: true, density: 'comfortable', uiSize: 14,
+  palette: 'frost', catColors: true, density: 'comfortable', uiSize: 14,
   desc: true, catsMode: 'wrap',
   termSize: 13, wrap: true, follow: true, scrollback: 5000, confirmClose: true,
   suggest: true, explain: true,
   sidebar: true,
 };
-let SET = { ...DEFAULTS, ...loadJSON('ws-settings', {}) };
-const saveSettings = () => store.set('ws-settings', JSON.stringify(SET));
+// Only what differs from the defaults is saved (with a version), so a new
+// default reaches everyone who never changed that setting.
+function loadSettings() {
+  const raw = { ...(loadJSON('ws-settings', {}) || {}) };
+  // the first version saved every key: its "classic" palette only means
+  // nobody picked one (terracotta was the default then)
+  if (!raw.v && raw.palette === 'classic') delete raw.palette;
+  delete raw.v;
+  return { ...DEFAULTS, ...raw };
+}
+let SET = loadSettings();
+function saveSettings() {
+  const out = { v: 2 };
+  for (const [k, v] of Object.entries(SET)) if (DEFAULTS[k] !== v) out[k] = v;
+  store.set('ws-settings', JSON.stringify(out));
+}
 
 function applySettings() {
   const root = document.documentElement;
@@ -186,6 +203,7 @@ function setSetting(key, value) {
   if (key === 'explain') renderExplain();
   if (key === 'suggest' && !value) closeSuggest();
   if ($('settings-dialog').open) renderSettingsForm();
+  if (!$('looks-menu').hidden) renderLooks();
 }
 
 // --------------------------------------------------------- panel sizes
@@ -290,28 +308,99 @@ function renderSettingsForm() {
   }
   for (const r of form.querySelectorAll('input[name="theme"]')) r.checked = r.value === theme;
   $('set-notify').checked = notify;
-  const box = $('palettes');
+  $('palettes').replaceChildren(...paletteButtons());
+}
+
+/** One button per palette, previewed in the current light / dark mode. */
+function paletteButtons() {
   const dark = effectiveDark();
-  box.replaceChildren(...PALETTES.map((p) => {
+  return PALETTES.map((p) => {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'swatch';
     b.setAttribute('role', 'radio');
     b.setAttribute('aria-checked', String(p.id === SET.palette));
-    b.title = p.name;
+    b.tabIndex = p.id === SET.palette ? 0 : -1;
+    b.title = p.id === DEFAULTS.palette ? `${p.name} (default)` : p.name;
+    b.dataset.palette = p.id;
     const sw = document.createElement('span');
     sw.className = 'sw';
-    const bg = document.createElement('i');
     const lift = parseFloat(p.lift || '0');
-    bg.style.setProperty('background', dark ? `hsl(${p.h} ${p.s} ${9 + lift}%)` : `hsl(${p.h} ${p.s} 96%)`);
+    const bg = document.createElement('i');
+    bg.style.setProperty('background', dark ? `hsl(${p.h} ${p.s} ${6 + lift}%)` : `hsl(${p.h} ${p.s} 96%)`);
+    const panel = document.createElement('i');
+    panel.className = 'pn';
+    panel.style.setProperty('background', dark ? `hsl(${p.h} ${p.s} ${12 + lift}%)` : `hsl(${p.h} ${p.s} 99%)`);
     const ac = document.createElement('i');
+    ac.className = 'ac';
     ac.style.setProperty('background', `hsl(${p.ah} ${p.as} ${dark ? p.al : p.ll})`);
-    sw.append(bg, ac);
+    sw.append(bg, panel, ac);
     b.append(sw, p.name);
     b.addEventListener('click', () => setSetting('palette', p.id));
     return b;
-  }));
+  });
 }
+
+// arrows move between the palettes of a group, like radio buttons
+function paletteKeys(e) {
+  const step = { ArrowRight: 1, ArrowDown: 5, ArrowLeft: -1, ArrowUp: -5 }[e.key];
+  if (!step) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const items = [...e.currentTarget.querySelectorAll('.swatch')];
+  const i = items.indexOf(document.activeElement);
+  const next = items[Math.max(0, Math.min(items.length - 1, (i < 0 ? 0 : i) + step))];
+  next.click();
+  e.currentTarget.querySelector(`[data-palette="${next.dataset.palette}"]`)?.focus();
+}
+$('palettes').addEventListener('keydown', paletteKeys);
+
+// ------------------------------------------------ the top bar's colors menu
+
+function renderLooks() {
+  $('looks-grid').replaceChildren(...paletteButtons());
+  for (const r of document.querySelectorAll('input[name="looks-theme"]')) r.checked = r.value === theme;
+  $('looks-cats').checked = SET.catColors;
+  const p = PALETTES.find((x) => x.id === SET.palette) || PALETTES[0];
+  $('looks-name').textContent = p.id === DEFAULTS.palette ? `${p.name} · default` : p.name;
+}
+
+function placeLooks() {
+  const r = $('open-looks').getBoundingClientRect();
+  const m = $('looks-menu');
+  m.style.setProperty('top', `${r.bottom + 8}px`);
+  m.style.setProperty('right', `${Math.max(8, window.innerWidth - r.right)}px`);
+}
+
+function openLooks() {
+  renderLooks();
+  $('looks-menu').hidden = false;
+  $('open-looks').setAttribute('aria-expanded', 'true');
+  placeLooks();
+  $('looks-grid').querySelector('[aria-checked="true"]')?.focus();
+}
+
+function closeLooks(refocus) {
+  if ($('looks-menu').hidden) return;
+  $('looks-menu').hidden = true;
+  $('open-looks').setAttribute('aria-expanded', 'false');
+  if (refocus) $('open-looks').focus();
+}
+
+$('open-looks').addEventListener('click', () => ($('looks-menu').hidden ? openLooks() : closeLooks(false)));
+$('looks-grid').addEventListener('keydown', paletteKeys);
+$('looks-menu').addEventListener('change', (e) => {
+  if (e.target.name === 'looks-theme') setTheme(e.target.value);
+  else if (e.target.id === 'looks-cats') setSetting('catColors', e.target.checked);
+});
+$('looks-more').addEventListener('click', () => { closeLooks(false); openSettings(); });
+$('looks-menu').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeLooks(true); }
+});
+document.addEventListener('pointerdown', (e) => {
+  if (!$('looks-menu').hidden && !e.target.closest('#looks-menu, #open-looks')) closeLooks(false);
+});
+window.addEventListener('resize', () => { if (!$('looks-menu').hidden) placeLooks(); });
 
 $('open-settings').addEventListener('click', openSettings);
 function openSettings() {
@@ -1926,7 +2015,7 @@ for (const b of document.querySelectorAll('[data-close]')) {
   b.addEventListener('click', () => b.closest('dialog').close());
 }
 
-// keys: / filter, f find, g grid, 0-4 terminals, j/k list, ←/→ category, b tool list, , settings, ? help
+// keys: / filter, f find, g grid, 0-4 terminals, j/k list, ←/→ category, b tool list, p colors, , settings, ? help
 document.addEventListener('keydown', (e) => {
   const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName || '');
   if (e.key === 'Escape' && typing && document.activeElement.id !== 'filter') {
@@ -1934,6 +2023,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (typing || e.ctrlKey || e.metaKey || e.altKey || document.querySelector('dialog[open]')) return;
+  if (e.target.closest && e.target.closest('#looks-menu')) return;
   const k = e.key;
   // a focused category header folds on Enter / Space like any button
   if ((k === 'Enter' || k === ' ') && document.activeElement?.classList.contains('group')) return;
@@ -1948,6 +2038,7 @@ document.addEventListener('keydown', (e) => {
   else if (k === '?') { e.preventDefault(); $('help-dialog').showModal(); }
   else if (k === 'b') { e.preventDefault(); setSetting('sidebar', !SET.sidebar); }
   else if (k === ',') { e.preventDefault(); openSettings(); }
+  else if (k === 'p') { e.preventDefault(); if ($('looks-menu').hidden) openLooks(); else closeLooks(true); }
   else if (/^[0-4]$/.test(k)) { e.preventDefault(); setFocus(Number(k), true); }
   else if (k === 'j' || k === 'ArrowDown') { e.preventDefault(); moveSel(1); }
   else if (k === 'k' || k === 'ArrowUp') { e.preventDefault(); moveSel(-1); }
