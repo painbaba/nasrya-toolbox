@@ -1,18 +1,21 @@
 <div align="center">
 
-```
- ██╗    ██╗██╗███╗   ██╗███████╗██████╗ ██╗      ██████╗ ██╗████████╗
- ██║    ██║██║████╗  ██║██╔════╝██╔══██╗██║     ██╔═══██╗██║╚══██╔══╝
- ██║ █╗ ██║██║██╔██╗ ██║███████╗██████╔╝██║     ██║   ██║██║   ██║
- ██║███╗██║██║██║╚██╗██║╚════██║██╔═══╝ ██║     ██║   ██║██║   ██║
- ╚███╔███╔╝██║██║ ╚████║███████║██║     ███████╗╚██████╔╝██║   ██║
-  ╚══╝╚══╝ ╚═╝╚═╝  ╚═══╝╚══════╝╚═╝     ╚══════╝ ╚═════╝ ╚═╝   ╚═╝
-```
+<a href="https://tahabenissa.github.io/nasrya-toolbox/">
+  <img src=".github/banner.svg" alt="Winsploit" width="720">
+</a>
 
 ### The native-Windows security toolbox, in your terminal.
 
 **Find, install and run 45 curated pentest & CTF tools from one keyboard-driven dashboard.**<br>
 No WSL. No VM. No guesswork about what actually works on Windows.
+
+<br>
+
+<a href="https://tahabenissa.github.io/nasrya-toolbox/"><img src="https://img.shields.io/badge/Website-5eff88?style=for-the-badge&logo=googlechrome&logoColor=050c0d" alt="Website" height="36"></a>&nbsp;
+<a href="https://tahabenissa.github.io/nasrya-toolbox/docs/"><img src="https://img.shields.io/badge/Docs-0e1f22?style=for-the-badge&logo=readthedocs&logoColor=5eff88" alt="Docs" height="36"></a>&nbsp;
+<a href="https://tahabenissa.github.io/nasrya-toolbox/demo/"><img src="https://img.shields.io/badge/Live%20demo-0e1f22?style=for-the-badge&logo=gnubash&logoColor=5eff88" alt="Live demo" height="36"></a>
+
+<br>
 
 [![CI](https://github.com/tahabenissa/nasrya-toolbox/actions/workflows/ci.yml/badge.svg)](https://github.com/tahabenissa/nasrya-toolbox/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/tahabenissa/nasrya-toolbox?include_prereleases&sort=semver)](https://github.com/tahabenissa/nasrya-toolbox/releases)
@@ -20,7 +23,7 @@ No WSL. No VM. No guesswork about what actually works on Windows.
 ![platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6)
 ![rust](https://img.shields.io/badge/rust-1.87%2B-B7410E)
 ![tools](https://img.shields.io/badge/catalog-45%20tools-8A2BE2)
-![tests](https://img.shields.io/badge/tests-82%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-169%20passing-brightgreen)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [Quick start](#-quick-start) •
@@ -127,7 +130,7 @@ Pick a tool with `↑/↓` (or `/` to filter), press `i` to install it and `Ente
 
 ### 🧠 Built-in helpers
 - **Hash identifier** (`h` in the dashboard, or `winsploit hashid <hash>`). Works offline, knows
-  37 hash formats, and gives the matching **`hashcat -m`** mode and **`john --format`** name.
+  45 hash formats, and gives the matching **`hashcat -m`** mode and **`john --format`** name.
 - **Per-run log files** for every run and install: the command, all output (including what you
   typed), the exit code and timestamps. Ready to use as evidence in a report.
 
@@ -525,13 +528,23 @@ flowchart LR
 ### Development
 
 ```powershell
-cargo test                      # 82 unit tests
+cargo test                      # 169 unit tests
 cargo fmt --all -- --check
 cargo clippy --all-targets
 ```
 
 CI builds, lints and smoke-tests (`--version`, `list`) on `windows-latest` for every push and PR.
 Pushing a `v*` tag builds and publishes a release zip.
+
+**Website.** The [website](https://tahabenissa.github.io/nasrya-toolbox/) (landing page, docs and
+a live demo of the web view) lives in `site/` and is deployed to GitHub Pages on every push to
+`main` that touches it, `tools.yaml` or `src/web/`. Tool counts, the catalog and the demo are
+generated from the repo, so adding a tool needs no site change.
+
+```powershell
+cd site; npm ci; npm run dev          # http://localhost:3000
+node site/scripts/readme-banner.mjs   # regenerate .github/banner.svg (the README wordmark)
+```
 
 ## 🆕 What's new
 
