@@ -292,6 +292,20 @@ fn render_start_menu(f: &mut Frame, th: &Theme, cur: usize, area: Rect) {
     f.render_widget(Paragraph::new(lines), block);
 }
 
+/// Drop whole trailing parts of `line` (and a separator left dangling) until
+/// it fits `width`, so the header never cuts a word in half. The first
+/// `keep` spans always stay (the name; with a challenge, also its title).
+pub fn fit(mut line: Line<'static>, width: u16, keep: usize) -> Line<'static> {
+    let is_sep = |s: &Span| s.content.trim().is_empty() || s.content.trim() == "·";
+    while line.width() > width as usize && line.spans.len() > keep {
+        line.spans.pop();
+        while line.spans.len() > keep && line.spans.last().is_some_and(is_sep) {
+            line.spans.pop();
+        }
+    }
+    line
+}
+
 /// A compact one-line wordmark for the main dashboard header.
 /// With an active challenge, its title and target replace the tagline.
 pub fn wordmark(th: &Theme, challenge: Option<(String, String)>) -> Line<'static> {
@@ -370,5 +384,34 @@ mod tests {
             ..Default::default()
         };
         assert!(cube_lines(&ansi.theme()).is_none());
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    #[test]
+    fn header_drops_whole_words_not_halves() {
+        let th = crate::theme::Settings::default().theme();
+        let full = wordmark(&th, None);
+        let text = |l: &Line| {
+            l.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        };
+        assert_eq!(text(&fit(full.clone(), 200, 1)), text(&full));
+        // room for the name and the tagline, not "· command runner"
+        let mid = fit(full.clone(), 48, 1);
+        assert!(text(&mid).ends_with("security toolbox"), "{:?}", text(&mid));
+        // even less room: no half-cut "security too"
+        let short = fit(full, 30, 1);
+        assert!(!text(&short).contains("too"), "{:?}", text(&short));
+        assert!(text(&short).contains("winsploit"));
+        // a challenge title stays; its target goes first
+        let ch = wordmark(&th, Some(("htb / lame".into(), "10.10.10.3".into())));
+        let ch = text(&fit(ch, 26, 3));
+        assert!(ch.ends_with("htb / lame"), "{ch:?}");
     }
 }

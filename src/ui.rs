@@ -757,7 +757,12 @@ fn render_header(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         .challenge
         .as_ref()
         .map(|w| (w.title(), w.info.target.clone()));
-    f.render_widget(Paragraph::new(banner::wordmark(th, ctx)), cols[0]);
+    // the name always shows; with a challenge, its title too
+    let keep = if ctx.is_some() { 3 } else { 1 };
+    f.render_widget(
+        Paragraph::new(banner::fit(banner::wordmark(th, ctx), cols[0].width, keep)),
+        cols[0],
+    );
 
     // Clickable agent icon: a filled chip, a braille spinner while it works.
     const SPIN: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
