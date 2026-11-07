@@ -3957,8 +3957,7 @@ mod tests {
                 .find(|(k, _)| *k == kind)
                 .unwrap_or_else(|| panic!("{kind}: no terminal key in Action::BINDINGS"));
             assert!(
-                ui::HELP
-                    .iter()
+                ui::help_rows()
                     .any(|(k, d)| k.split_whitespace().any(|w| w == *key) || d.contains(key)),
                 "{kind}: key {key:?} isn't listed in the ? overlay"
             );
