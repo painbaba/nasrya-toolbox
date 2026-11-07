@@ -316,3 +316,11 @@ tools:
     pipx: sherlock-project
     run_cmd: sherlock
     args_hint: "username"
+
+  - name: sleuthkit
+    category: forensics
+    description: Disk-image and filesystem forensics (TSK fls; also icat, mmls, ...)
+    exe: fls
+    scoop: sleuthkit
+    run_cmd: fls
+    args_hint: "-r -o 2048 image.dd"
