@@ -235,3 +235,12 @@ tools:
     pipx: git+https://github.com/commixproject/commix
     run_cmd: commix
     args_hint: "--url=https://example.com/?addr=127.0.0.1 --batch"
+
+  - name: hashid
+    category: passwords
+    description: Identify hash types
+    exe: hashid
+    install: pipx
+    pipx: hashid
+    run_cmd: hashid
+    args_hint: "-m 5f4dcc3b5aa765d61d8327deb882cf99"
