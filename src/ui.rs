@@ -142,10 +142,7 @@ fn render_output(f: &mut Frame, app: &App, area: Rect) {
             format!(" {} ", tool.name),
             Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!("· {} ", tool.description),
-            Style::default().fg(DIM),
-        ),
+        Span::styled(format!("· {} ", tool.description), Style::default().fg(DIM)),
     ]);
 
     // Tail the scrollback to roughly fit the visible height.
@@ -222,7 +219,11 @@ fn style_output_line(l: &str) -> Span<'static> {
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     let content = match app.mode {
         Mode::Input => {
-            let cursor = if (app.tick / 4) % 2 == 0 { "█" } else { " " };
+            let cursor = if (app.tick / 4).is_multiple_of(2) {
+                "█"
+            } else {
+                " "
+            };
             Line::from(vec![
                 Span::styled(
                     " args ▸ ",

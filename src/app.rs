@@ -114,7 +114,10 @@ impl App {
                 }
             })
             .collect();
-        let installed = results.iter().filter(|s| **s == ToolStatus::Installed).count();
+        let installed = results
+            .iter()
+            .filter(|s| **s == ToolStatus::Installed)
+            .count();
         self.status = results;
         self.status_line = format!("{installed}/{} tools installed", self.tools.len());
     }

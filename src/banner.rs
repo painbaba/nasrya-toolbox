@@ -36,12 +36,20 @@ fn gradient(t: f32) -> (u8, u8, u8) {
     let local = scaled - i as f32;
     let (ar, ag, ab) = STOPS[i];
     let (br, bg, bb) = STOPS[i + 1];
-    (lerp(ar, br, local), lerp(ag, bg, local), lerp(ab, bb, local))
+    (
+        lerp(ar, br, local),
+        lerp(ag, bg, local),
+        lerp(ab, bb, local),
+    )
 }
 
 /// Mix a colour toward white by `amount` (0..=1) for a glowing highlight.
 fn glow(c: (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
-    (lerp(c.0, 255, amount), lerp(c.1, 255, amount), lerp(c.2, 255, amount))
+    (
+        lerp(c.0, 255, amount),
+        lerp(c.1, 255, amount),
+        lerp(c.2, 255, amount),
+    )
 }
 
 /// Render the full-screen splash shown at startup.
@@ -50,7 +58,10 @@ pub fn render_splash(f: &mut Frame, tick: u64) {
 
     // Gently pulsing double border around the whole screen.
     let border_pulse = ((tick / 4) % 6) as f32 / 5.0;
-    let bc = glow((0, 200, 220), 0.25 * (1.0 - (border_pulse - 0.5).abs() * 2.0).max(0.0));
+    let bc = glow(
+        (0, 200, 220),
+        0.25 * (1.0 - (border_pulse - 0.5).abs() * 2.0).max(0.0),
+    );
     let outer = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
@@ -85,7 +96,11 @@ pub fn render_splash(f: &mut Frame, tick: u64) {
         .iter()
         .enumerate()
         .map(|(i, l)| {
-            let t = if n > 1 { i as f32 / (n as f32 - 1.0) } else { 0.0 };
+            let t = if n > 1 {
+                i as f32 / (n as f32 - 1.0)
+            } else {
+                0.0
+            };
             let mut c = gradient(t);
             if i as u64 == glow_idx {
                 c = glow(c, 0.5);
@@ -103,15 +118,21 @@ pub fn render_splash(f: &mut Frame, tick: u64) {
 
     // Subtitle.
     let subtitle = Line::from(vec![
-        Span::styled("native-windows security toolbox", Style::default().fg(Color::Rgb(150, 170, 190))),
+        Span::styled(
+            "native-windows security toolbox",
+            Style::default().fg(Color::Rgb(150, 170, 190)),
+        ),
         Span::styled("  ·  ", Style::default().fg(Color::Rgb(90, 100, 120))),
-        Span::styled("command runner", Style::default().fg(Color::Rgb(150, 170, 190))),
+        Span::styled(
+            "command runner",
+            Style::default().fg(Color::Rgb(150, 170, 190)),
+        ),
     ])
     .alignment(Alignment::Center);
     f.render_widget(Paragraph::new(subtitle), rows[3]);
 
     // Blinking "press any key" prompt.
-    let on = (tick / 5) % 2 == 0;
+    let on = (tick / 5).is_multiple_of(2);
     let prompt = if on {
         Line::from(vec![
             Span::styled("▸ ", Style::default().fg(Color::Rgb(120, 220, 255))),
