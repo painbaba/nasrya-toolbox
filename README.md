@@ -130,8 +130,7 @@ pass `--catalog .\tools.yaml` to use it on purpose. The active path is shown in 
 | `q` | quit |
 
 **Logs:** every tool run and install is also written to
-`%LOCALAPPDATA%
-asrya\logs\<UTC timestamp>-<tool>.log`: the command, every output line
+`%LOCALAPPDATA%\nasrya\logs\<UTC timestamp>-<tool>.log`: the command, every output line
 (including what you typed into the tool), the exit code and start/end times. The path is shown
 when the run starts. Handy as evidence for a report, and nothing is lost when output scrolls
 past the in-memory buffer.
