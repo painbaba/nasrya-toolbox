@@ -125,3 +125,11 @@ tools:
     scoop: rustscan
     run_cmd: rustscan
     args_hint: "-a 127.0.0.1 -- -sV"
+
+  - name: openssl
+    category: crypto
+    description: General-purpose cryptography toolkit
+    exe: openssl
+    scoop: openssl
+    run_cmd: openssl
+    args_hint: "version -a"
