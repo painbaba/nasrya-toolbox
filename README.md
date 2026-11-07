@@ -9,70 +9,64 @@
  ╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝
 ```
 
-**A native-Windows security toolbox & command runner — in your terminal.**
+### The native-Windows security toolbox, in your terminal.
 
-`nasrya` is a fast, beautiful TUI that detects, installs (via [Scoop](https://scoop.sh)) and runs
-the pentest tools that actually work natively on Windows — no WSL, no VM.
+**Find, install and run 45 curated pentest & CTF tools from one keyboard-driven dashboard.**<br>
+No WSL. No VM. No guesswork about what actually works on Windows.
 
 [![CI](https://github.com/tahabenissa/nasrya-toolbox/actions/workflows/ci.yml/badge.svg)](https://github.com/tahabenissa/nasrya-toolbox/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/tahabenissa/nasrya-toolbox?include_prereleases&sort=semver)](https://github.com/tahabenissa/nasrya-toolbox/releases)
 ![status](https://img.shields.io/badge/status-alpha-orange)
-![platform](https://img.shields.io/badge/platform-Windows-0078D6)
-![built with](https://img.shields.io/badge/built%20with-Rust%20%2B%20ratatui-000000)
-![license](https://img.shields.io/badge/license-MIT-green)
+![platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6)
+![rust](https://img.shields.io/badge/rust-1.87%2B-B7410E)
+![tools](https://img.shields.io/badge/catalog-45%20tools-8A2BE2)
+![tests](https://img.shields.io/badge/tests-82%20passing-brightgreen)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+[Quick start](#-quick-start) •
+[Features](#-features) •
+[Catalog](#-the-catalog) •
+[Usage](#-usage) •
+[Adding tools](#-adding-a-tool) •
+[Security model](#-security-model) •
+[Architecture](#-architecture) •
+[Roadmap](#-roadmap)
 
 </div>
 
 ---
 
-## ⚠️ Authorized use only
-
-`nasrya` is for **authorized** penetration testing, security research, CTFs, and learning.
-Only use it against systems you own or have **explicit written permission** to test.
-Unauthorized scanning or attacking of systems is illegal in most jurisdictions. You are
-responsible for staying inside your rules of engagement.
+> [!WARNING]
+> **Authorized use only.** `nasrya` is for authorized penetration testing, security research,
+> CTFs and learning. Only point it at systems you own or have **explicit written permission** to
+> test. Unauthorized scanning or attacking is illegal in most jurisdictions, and staying inside
+> your rules of engagement is your responsibility.
 
 ---
 
-## Why this exists
+## Why nasrya?
 
-Kali Linux is the home of security tooling, but a lot of people work on **Windows**. The existing
-options are all compromises:
+Kali is the home of security tooling, but plenty of people work on **Windows**, and the existing
+options all make you compromise:
 
-- **Commando VM / FLARE-VM** — excellent, but one-shot *VM provisioners*, not a day-to-day launcher.
-- **PentestBox** — the right idea (native, portable), but abandoned since ~2016 and license-murky.
-- **UniGetUI** — a great package GUI, but no security curation and no "run the tool" workflow.
-
-There is **no actively maintained, cleanly-licensed, native-Windows launcher** that both
-*installs* and *runs* security tools from one interface. `nasrya` fills that gap — and it's honest
-about what genuinely works on Windows versus what needs Linux.
-
-## Features
-
-- 🎛️ **Interactive TUI dashboard** — browse tools by category, see install status at a glance, launch with one key.
-- 📦 **Scoop-backed installs** — install a missing tool straight from the dashboard; detection is a real PATH probe, not a guess.
-- 📡 **Live output streaming** — a tool's stdout/stderr streams into the output pane in real time, color-coded, and is cancellable (kills the whole process tree).
-- 🧩 **Config-driven registry** — every tool is a YAML entry; add one without touching code.
-- 🎨 **Looks good** — ASCII-art splash, rounded panels, a cohesive color scheme.
-
-## Honest scope — what works natively on Windows
-
-`nasrya` deliberately curates tools that run *well* on Windows:
-
-| Works great | Works (with notes) | Not on Windows — use Linux |
+| Option | What's good | What's missing |
 |---|---|---|
-| nmap, nuclei, ffuf, gobuster, httpx, amass | sqlmap, theHarvester, volatility3 (need Python) | **aircrack-ng live capture** (no monitor mode/injection) |
-| wireshark / tshark, hashcat, John | hashcat (needs GPU drivers), tshark (needs Npcap + admin) | THC-Hydra, WPScan, WhatWeb, masscan (degraded) |
+| **Commando VM / FLARE-VM** | Excellent, thorough | One-shot *VM provisioners*, not something you open every day |
+| **PentestBox** | Right idea: native and portable | Abandoned since ~2016, unclear licensing |
+| **UniGetUI** | Great package GUI | No security curation, no "run the tool" workflow |
+| **nasrya** | Curated, native, installs **and** runs, MIT, actively developed | Alpha, see [Roadmap](#-roadmap) |
 
-> **Wireless, honestly:** live Wi-Fi monitor-mode and packet injection **do not work** on Windows
-> with normal adapters. Only *offline* cracking of already-captured files is useful here. For real
-> wireless work, use Linux with a supported USB adapter.
+There is no actively maintained, cleanly licensed, native-Windows launcher that both *installs*
+and *runs* security tools from one interface. `nasrya` fills that gap, and it's honest about what
+really works on Windows and what needs Linux.
 
-## Install
+## ⚡ Quick start
 
-**Requirements:** Windows 10/11, [Rust](https://rustup.rs) (to build), and [Scoop](https://scoop.sh) (to install tools from inside the dashboard).
+**You need:** Windows 10/11, [Scoop](https://scoop.sh) (nasrya installs tools through it), and
+[Rust 1.87+](https://rustup.rs) to build from source.
 
 ```powershell
-# 1. Install Scoop (if you don't have it)
+# 1. Install Scoop (skip if you have it)
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 Invoke-RestMethod -Uri https://get.scoop.sh | Invoke-Expression
 
@@ -81,98 +75,189 @@ git clone https://github.com/tahabenissa/nasrya-toolbox
 cd nasrya-toolbox
 cargo build --release
 
-# 3. Run it (a dev build finds the checkout's tools.yaml from any directory)
+# 3. Launch the dashboard (a dev build finds the checkout's tools.yaml from any directory)
 .\target\release\nasrya
 ```
 
-Some tools live outside Scoop's main bucket. Pressing `i` adds the right bucket automatically
-the first time it's needed (URLs for non-standard buckets come from the `buckets:` map in
-`tools.yaml`). To add them by hand instead:
+Pick a tool with `↑/↓` (or `/` to filter), press `i` to install it and `Enter` to run it. Press
+`?` any time to see every key.
 
-```powershell
-# nuclei, httpx, subfinder, katana, …
-scoop bucket add security https://github.com/opsqw/scoop-security
-# Sysinternals (strings), jadx, …
-scoop bucket add extras
+> [!NOTE]
+> **Prebuilt binaries:** tagging `v*` publishes a Windows x64 zip (`nasrya.exe` + `tools.yaml`) on
+> the [Releases](https://github.com/tahabenissa/nasrya-toolbox/releases) page. The current
+> `v0.1.0` release **predates** everything listed under [What's new](#-whats-new), so build from
+> source for now. The binary is unsigned, so Smart App Control may ask you to allow it.
+
+## ✨ Features
+
+### 🎛️ A dashboard built for the keyboard
+- **Browse by category** with live install status: `●` installed, `○` missing, `◐` conflict.
+- **Instant filter (`/`)** by name, category or description. Words AND together.
+- **A real line editor** for arguments: word jumps, word delete, paste, and per-tool **history**
+  with `↑/↓`.
+- **Key help overlay (`?`)** so the footer stays short.
+
+### 📡 Live, interactive output
+- stdout/stderr **stream into the output pane** in real time, color-coded.
+- **Talk to running tools.** Each process gets its own input pipe, so you can answer prompts
+  (`Ctrl+D` = end of input) without fighting the dashboard for keystrokes.
+- **Scrollback** (`PgUp/PgDn/Home/End`) and **find in output** (`f`, `n`, `N`) with highlighting.
+- **Survives messy output:** non-UTF-8 bytes don't stop the stream, and carriage-return progress
+  bars and ANSI escape codes are cleaned up instead of smearing the pane.
+- **`c` cancels** the whole process tree, not just the parent.
+
+### 📦 One-key installs, done properly
+- **Scoop** for native tools, with **missing buckets added automatically** the first time
+  they're needed (`bucket/pkg` is pinned so the right package wins).
+- **pipx** for Python tools. Each gets its own venv, and nasrya installs Python and pipx
+  through Scoop first if they're missing.
+- **nasrya's own Scoop bucket** for tools nobody else packages (gau, John jumbo, steghide, nikto,
+  SecLists-lite). Each has a pinned URL and **SHA-256 hash**.
+- **PATH changes picked up live** after an install, with no restart needed.
+- Detection runs **in-process and off the UI thread**, so the dashboard never freezes.
+
+### 🧠 Built-in helpers
+- **Hash identifier** (`h` in the dashboard, or `nasrya hashid <hash>`). Works offline, knows
+  37 hash formats, and gives the matching **`hashcat -m`** mode and **`john --format`** name.
+- **Per-run log files** for every run and install: the command, all output (including what you
+  typed), the exit code and timestamps. Ready to use as evidence in a report.
+
+### 🧩 Config-driven, honest by design
+- Every tool is a **YAML entry**, so you add one without touching code.
+- **Four launch modes:** `stream` (CLI in the pane), `gui` (desktop apps), `web` (start a server,
+  open the browser) and `dataset` (wordlists).
+- **Impostor detection:** `verify:` catches same-named programs (ProjectDiscovery `httpx` vs the
+  Python `httpx`, Sysinternals `strings` vs GNU `strings`) and refuses to launch the wrong one.
+- **Per-tool caveats** (`note:`) are shown on every run, for example "needs Npcap + admin".
+
+## 🧰 The catalog
+
+**45 tools across 11 categories**, all chosen because they run well **natively** on Windows.
+
+| Category | Tools |
+|---|---|
+| **Recon** | nmap · rustscan · gobuster · httpx · subfinder · amass · gau |
+| **Web** | sqlmap · nuclei · ffuf · feroxbuster · katana · arjun · dirsearch · wfuzz · commix · nikto · ZAP 🖥️ |
+| **Passwords** | hashcat · John the Ripper (jumbo) · hashid · NetExec |
+| **Crypto** | openssl · RsaCtfTool · CyberChef 🌐 |
+| **Forensics** | exiftool · strings (Sysinternals) · Sleuth Kit · Volatility 3 |
+| **Reversing** | radare2 · upx · jadx · apktool · Detect It Easy · Cutter 🖥️ · x64dbg 🖥️ · dnSpy 🖥️ · Ghidra 🖥️ |
+| **Pwn** | pwntools · ropper |
+| **OSINT** | theHarvester · Sherlock |
+| **Stego** | steghide |
+| **Sniffing** | tshark |
+| **Wordlists** | SecLists-lite 📚 (wired into gobuster, ffuf, feroxbuster, dirsearch, wfuzz and john) |
+
+<sub>🖥️ desktop app (`launch: gui`) · 🌐 opens in your browser (`launch: web`) · 📚 dataset (`launch: dataset`)</sub>
+
+### Honest scope
+
+| ✅ Works great | ⚠️ Works, with notes | ❌ Use Linux instead |
+|---|---|---|
+| nmap, nuclei, ffuf, gobuster, httpx, subfinder, katana, radare2, Ghidra | **hashcat** needs GPU drivers · **tshark** needs Npcap and admin · Python tools need pipx (nasrya bootstraps it) | **Live Wi-Fi capture** (aircrack-ng: no monitor mode or injection) · THC-Hydra, WPScan, WhatWeb, masscan (degraded on Windows) |
+
+> [!IMPORTANT]
+> **Wireless, honestly:** live Wi-Fi monitor mode and packet injection **don't work** on Windows
+> with normal adapters. Only *offline* cracking of files you've already captured is useful here.
+> For real wireless work, use Linux with a supported USB adapter. That's why aircrack-ng is
+> deliberately left out of the catalog.
+
+## 🚀 Usage
+
+```text
+nasrya                    launch the interactive dashboard
+nasrya list               list the catalog with install status (installed / missing / CONFLICT)
+nasrya hashid <h> [<h>…]  identify one or more hashes (hashcat -m / john --format hints)
+nasrya --help, -h         show help
+nasrya --version, -V      show version
+
+--catalog <path>          use a specific tools.yaml (works with or without `list`)
 ```
 
-## Usage
-
-```
-nasrya              launch the interactive dashboard
-nasrya list         list the tool catalog with install status
-nasrya hashid <h>   identify a hash (built in: hashcat -m / john --format hints)
-nasrya --help       show help
-nasrya --version    show version
-
---catalog <path>    use a specific tools.yaml (works with or without `list`)
-```
-
-**Which `tools.yaml` is used?** In order: `--catalog <path>`, then `%NASRYA_CATALOG%`, then the
-one next to `nasrya.exe`, then the source checkout (dev builds), then
-`%APPDATA%\nasrya\tools.yaml`. The catalog decides what Enter runs, so nasrya **never** picks
-up a `tools.yaml` from the current directory on its own. You'll often run it inside untrusted
-folders (challenge files, loot, cloned repos). If one is there, nasrya says it was ignored;
-pass `--catalog .\tools.yaml` to use it on purpose. The active path is shown in the dashboard.
-
-**Dashboard keys**
+### Dashboard keys
 
 | Key | Action |
 |---|---|
-| `↑ / ↓` | move selection |
-| `/` | filter the list by name, category or description (words AND together; `Esc` clears) |
-| `Enter` | run the selected tool (edit the prefilled args, then Enter). While a tool is running: type a line to send to its input (`Ctrl+D` = end of input) |
-| `i` | install the selected tool (Scoop or pipx) |
-| `r` | re-detect what's installed |
-| `PgUp / PgDn` | scroll the output (`Home` = top, `End` = follow live output) |
-| `f` | find text in the output (`n` = older match, `N` = newer; the match is highlighted) |
-| `c` | cancel the running process |
-| `h` | identify a hash (built in, works offline) |
-| `?` | show all keys |
-| `q` | quit |
+| `↑` `↓` | Move selection |
+| `/` | Filter by name, category or description (`Esc` clears) |
+| `Enter` | Run the selected tool (edit the prefilled args, then `Enter`) |
+| *while running* | Type a line to send to the tool's input · `Ctrl+D` = end of input |
+| `i` | Install the selected tool (Scoop or pipx) |
+| `r` | Re-detect what's installed |
+| `PgUp` `PgDn` | Scroll the output · `Home` = top · `End` = follow live output |
+| `f` · `n` · `N` | Find in output · older match · newer match |
+| `c` | Cancel the running process (kills the whole tree) |
+| `h` | Identify a hash (built in, offline) |
+| `?` | Show all keys |
+| `q` | Quit |
 
-**Logs:** every tool run and install is also written to
-`%LOCALAPPDATA%\nasrya\logs\<UTC timestamp>-<tool>.log`: the command, every output line
-(including what you typed into the tool), the exit code and start/end times. The path is shown
-when the run starts. Handy as evidence for a report, and nothing is lost when output scrolls
-past the in-memory buffer.
+### Editing arguments
 
-**Editing the args / hash prompt:** `←/→` move, `Ctrl+←/→` jump words, `Home/End` (or
-`Ctrl+A/E`), `Del`, `Ctrl+Backspace` / `Ctrl+W` delete a word, `Ctrl+U` clear to the start,
-`↑/↓` cycle through the arguments you used before with that tool (per session). Pasting a
-whole command line works too.
+The args and hash prompts are real line editors:
 
-**Arguments** are split on spaces. Use `"double"` or `'single'` quotes to keep spaces in
-one argument, e.g. `-H "User-Agent: nasrya"` or `-w "C:\My Lists\big.txt"`. Backslashes are
-literal (no need to double them), and `\"` is a literal quote. A quoted path can't end in a
-backslash: write `"C:\dir"`, not `"C:\dir\"`.
+| Keys | Action |
+|---|---|
+| `←` `→` · `Ctrl+←` `Ctrl+→` | Move by character · by word |
+| `Home` `End` (or `Ctrl+A` `Ctrl+E`) | Start / end of line |
+| `Del` · `Ctrl+Backspace` / `Ctrl+W` · `Ctrl+U` | Delete char · delete word · clear to start |
+| `↑` `↓` | Cycle through args you've used with this tool (per session) |
+| Paste | Whole command lines work |
 
-## Adding a tool
+**Quoting:** arguments split on spaces, and `"double"` or `'single'` quotes keep spaces together:
 
-Edit [`tools.yaml`](tools.yaml) — no code changes:
+```text
+-H "User-Agent: nasrya"     -w "C:\My Lists\big.txt"
+```
+
+Backslashes are literal (no need to double them) and `\"` is a literal quote. A quoted path can't
+end in a backslash, so write `"C:\dir"`, not `"C:\dir\"`.
+
+### Logs
+
+Every run and install is also written to:
+
+```text
+%LOCALAPPDATA%\nasrya\logs\<UTC timestamp>-<tool>.log
+```
+
+The path is shown when the run starts, and nothing is lost when output scrolls past the in-memory
+buffer.
+
+### Extra Scoop buckets
+
+Pressing `i` adds any bucket a tool needs the first time it's needed. To add them yourself:
+
+```powershell
+scoop bucket add security https://github.com/opsqw/scoop-security   # nuclei, httpx, subfinder, katana, ffuf
+scoop bucket add extras                                             # Sysinternals, jadx, Ghidra, x64dbg, …
+scoop bucket add nasrya https://github.com/tahabenissa/nasrya-toolbox   # gau, john, steghide, nikto, seclists-lite
+```
+
+## ➕ Adding a tool
+
+Edit [`tools.yaml`](tools.yaml). No code changes needed, and the header of that file documents
+every field.
+
+<details open>
+<summary><b>Native tool (Scoop)</b></summary>
 
 ```yaml
   - name: gobuster
-    category: web
+    category: recon
     description: Directory / DNS / vhost brute-forcing
     exe: gobuster          # used to detect installation (PATH probe)
-    scoop: gobuster        # scoop package to install
+    scoop: gobuster        # Scoop package to install
     run_cmd: gobuster      # command actually launched
-    args_hint: "dir -u https://example.com -w wordlist.txt"
-    bucket: security       # optional: scoop bucket it lives in
+    args_hint: 'dir -u https://example.com -w "{app:seclists-lite}\common.txt"'
+    bucket: security       # optional; main-bucket tools omit it
 ```
 
-A bucket that Scoop doesn't know by name also needs its URL in the top-level `buckets:` map,
-so nasrya can add it on first install.
+A bucket Scoop doesn't know by name also needs its URL in the top-level `buckets:` map, so nasrya
+can add it on first install.
+</details>
 
-**Tools no Scoop bucket packages** (gau, John jumbo, steghide, nikto, ...) get a manifest in
-this repo's own Scoop bucket, [`bucket/`](bucket), and `bucket: nasrya` in their entry. Scoop then
-handles the download, **SHA-256 verification**, extraction and shims, and nasrya adds the bucket on
-first use. A manifest needs a pinned `url` + `hash` (`cargo test` checks every manifest is
-well-formed and that every `bucket: nasrya` entry has one).
-
-**Python tools** install with pipx (each in its own venv). If pipx is missing, nasrya installs
-Python and pipx through Scoop first:
+<details>
+<summary><b>Python tool (pipx)</b></summary>
 
 ```yaml
   - name: arjun
@@ -180,90 +265,194 @@ Python and pipx through Scoop first:
     description: HTTP parameter discovery
     exe: arjun
     install: pipx
-    pipx: arjun            # or git+https://github.com/owner/repo for unreleased tools
+    pipx: arjun            # or arjun==2.2, or git+https://github.com/owner/repo
     run_cmd: arjun
     args_hint: "-u https://example.com/endpoint"
 ```
 
-**Desktop and web apps** don't stream output. `launch: gui` starts the app in its own window.
-`launch: web` starts `run_cmd` (a local server, output streamed and cancellable with `c`) if
-there is one, then opens `url` in your browser:
+Each tool gets its own venv. If pipx is missing, nasrya installs Python and pipx through Scoop
+first.
+</details>
+
+<details>
+<summary><b>Tool nobody packages (nasrya's own bucket)</b></summary>
+
+Add a Scoop manifest to [`bucket/`](bucket) with a pinned `url` and `hash`, then set
+`bucket: nasrya` in the tool's entry. Scoop handles the download, **SHA-256 verification**,
+extraction and shims, and nasrya adds the bucket on first use. `cargo test` checks that every
+manifest is well-formed and that every `bucket: nasrya` entry has one.
+</details>
+
+<details>
+<summary><b>Desktop apps, web apps & datasets</b></summary>
 
 ```yaml
-    launch: gui                        # Ghidra, x64dbg, ...
+    launch: gui                         # Ghidra, x64dbg, …: opens in its own window
     # or
-    launch: web
-    url: http://127.0.0.1:5001         # SpiderFoot, ...
+    launch: web                         # start run_cmd (if any, streamed and cancellable), then open url
+    url: http://127.0.0.1:5001
+    # or
+    launch: dataset                     # wordlists: Enter lists the files and copies the folder path
 ```
 
-Some apps aren't put on PATH by Scoop (only a Start-menu shortcut), and some are just an HTML
-page. For those, `{scoop_app}` in `exe`, `run_cmd` or `url` expands to the app's Scoop folder:
-`exe: '{scoop_app}\dnSpy.exe'`, or `url: '{scoop_app}\CyberChef.html'` with `launch: web`.
+**Placeholders**
 
-**Wordlists and other data** use `launch: dataset`. There's nothing to run, so Enter lists the
-files and copies the folder path to the clipboard. `{app:NAME}` points another tool's
-arguments at an installed dataset. The shipped `seclists-lite` (the most-used SecLists files,
-pinned and hash-checked) is wired into gobuster, ffuf, feroxbuster, dirsearch, wfuzz and john
-this way:
+| Placeholder | Expands to | Allowed in |
+|---|---|---|
+| `{scoop_app}` | This tool's Scoop folder (`<scoop>\apps\<pkg>\current`) | `exe`, `run_cmd`, `url` |
+| `{app:NAME}` | Another installed Scoop app's folder | `exe`, `run_cmd`, `url`, `args_hint` |
+
+Use `{scoop_app}` for apps Scoop doesn't put on PATH (`exe: '{scoop_app}\dnSpy.exe'`) or that are
+just an HTML page (`url: '{scoop_app}\CyberChef.html'`).
+
+> [!TIP]
+> Write Windows paths in `'single quotes'`. Inside `"double quotes"`, YAML turns `\r`, `\x`, …
+> into escape sequences.
+</details>
+
+<details>
+<summary><b>Same-named impostors & caveats</b></summary>
 
 ```yaml
-    args_hint: 'dir -u https://example.com -w "{app:seclists-lite}\common.txt"'
+    verify: { args: "-version", contains: "projectdiscovery" }
+    note: "Needs Npcap and an elevated terminal."
 ```
 
-Write Windows paths in `'single quotes'`: inside `"double quotes"`, YAML turns `\r`, `\x`, ...
-into escape sequences.
+`verify:` runs the `exe` found on PATH (3 s timeout). If the output doesn't contain the text, the
+tool shows as a conflict (`◐`) along with the path that won, and it **won't be launched**. `note:`
+is shown every time the tool runs. Bad entries (a missing `scoop:`/`pipx:`, a web tool without
+`url:`, …) are all reported together when the catalog loads.
+</details>
 
-Some names are shared by unrelated programs (ProjectDiscovery's `httpx` and the Python
-`httpx` CLI, Sysinternals `strings` and GNU `strings`). `verify:` checks that the `exe` found on
-PATH is the right one: `verify: { args: "-version", contains: "projectdiscovery" }`. If it
-isn't, the tool shows as a conflict (`◐`), along with the path that won, and won't be launched.
+## 🔒 Security model
 
-`note:` adds a caveat that's shown every time the tool is run, e.g. a Windows limitation.
-Bad entries (missing `scoop:`/`pipx:`, a web tool without a `url:`, …) are reported together
-when the catalog loads.
+nasrya runs tools against real targets, often from folders full of untrusted files. It's built for
+that:
 
-## Architecture
+- **No implicit catalog loading from the current directory.** The catalog decides what `Enter`
+  runs, so a malicious `tools.yaml` in a CTF folder, a loot dir or a cloned repo is **ignored**.
+  nasrya tells you it skipped one, and you can opt in with `--catalog .\tools.yaml`.
+- **Catalog resolution order:** `--catalog <path>`, then `%NASRYA_CATALOG%`, then the one next to
+  `nasrya.exe`, then the source checkout (dev builds), then `%APPDATA%\nasrya\tools.yaml`. The
+  active path is shown in the dashboard.
+- **Wrong binaries are blocked.** `verify:` checks catch same-named programs earlier on PATH.
+- **Downloads are hash-pinned.** Every manifest in nasrya's bucket has a fixed URL and SHA-256.
+- **Arguments are parsed, not shelled.** Quote-aware splitting builds a real argv; there's no
+  command-string concatenation. Programs are resolved by PATH × PATHEXT (never the current
+  directory), and `.cmd`/`.bat` shims go through Rust's escaped cmd.exe path.
+- **Audit trail.** Every run and install leaves a timestamped log.
 
+## 🏗️ Architecture
+
+```mermaid
+flowchart LR
+    Y[tools.yaml] --> R[registry<br/>load + validate]
+    R --> D[detect<br/>PATH × PATHEXT + verify]
+    R --> I[install<br/>scoop · pipx · buckets]
+    I --> E[envpath<br/>live PATH refresh]
+    E --> D
+    D --> A[app<br/>state machine]
+    A --> U[ui<br/>ratatui dashboard]
+    A --> X[runner<br/>spawn · stream · stdin · kill tree]
+    X --> L[runlog<br/>per-run logs]
+    X --> U
 ```
-main.rs        CLI entry (TUI / list / help)
-registry.rs    loads + validates the YAML tool catalog ── security core (careful path)
-detect.rs      PATH x PATHEXT detection (ground truth) ──
-install.rs     install planning (scoop / pipx)         ──
-scoop.rs       scoop buckets + package installs        ──
-envpath.rs     picks up PATH changes after installs    ──
-args.rs        quote-aware argument splitting          ──
-hashid.rs      built-in hash identifier                ──
-editor.rs      args prompt line editor + history       ──
-runlog.rs      per-run log files                       ──
-runner.rs      spawn + stream / detach + kill tree      ──
-app.rs         state machine, launch/install control    ──
-ui.rs          dashboard rendering                       ── presentation layer
-banner.rs      ASCII-art splash + wordmark               ──
+
+| Module | Responsibility |
+|---|---|
+| `main.rs` | CLI entry point: TUI, `list`, `hashid`, `--catalog` |
+| `registry.rs` | Loads and validates the YAML catalog, resolves the catalog path, expands placeholders |
+| `detect.rs` | PATH × PATHEXT detection (ground truth) and `verify:` impostor checks |
+| `install.rs` | Install planning (Scoop / pipx, including Python and pipx bootstrap) |
+| `scoop.rs` | Scoop buckets, package installs, app directories |
+| `envpath.rs` | Picks up PATH changes made after nasrya started |
+| `args.rs` | Quote-aware argument splitting |
+| `editor.rs` | Args prompt line editor and per-tool history |
+| `hashid.rs` | Built-in hash identifier |
+| `runner.rs` | Spawn, stream, stdin pipe, detach (gui/web), kill tree, output cleaning |
+| `runlog.rs` | Per-run log files |
+| `app.rs` | State machine, launch/install control, scrollback, search, filter |
+| `ui.rs` · `banner.rs` | Dashboard rendering, ASCII splash and wordmark |
+| `bucket_tests.rs` | Validates every manifest in `bucket/` against the catalog |
+
+### Development
+
+```powershell
+cargo test                      # 82 unit tests
+cargo fmt --all -- --check
+cargo clippy --all-targets
 ```
 
-Config-driven tool registry → detector/installer → process runner (streams live output and tees it)
-→ interactive dashboard. Roadmap below extends the security core toward real engagement workflows.
+CI builds, lints and smoke-tests (`--version`, `list`) on `windows-latest` for every push and PR.
+Pushing a `v*` tag builds and publishes a release zip.
 
-## Roadmap
+## 🆕 What's new
 
-- [ ] Per-engagement workspaces (scope list, authorization record, audit log) for real pentest workflows
-- [ ] Scope enforcement before every launch (block/override-with-reason)
-- [x] Richer tool catalog across all categories: 45 entries (recon / web / passwords / crypto / forensics / stego / reversing / pwn / osint / wordlists)
-- [x] Scrollback (PgUp/PgDn) and per-run log files
-- [x] Output search
-- [ ] Artifacts (collect files a tool writes, e.g. -oX / -o outputs, next to the run log)
-- [ ] One-shot report generation (Markdown/HTML)
-- [x] Scoop bucket auto-add for security tools
-- [x] pipx (Python) installs, GUI / web-app / dataset launch modes, nasrya's own Scoop bucket
+<details open>
+<summary><b>Unreleased (since v0.1.0)</b></summary>
+
+**Catalog: 6 → 45 tools**
+- Recon and web: gobuster, feroxbuster, httpx, subfinder, amass, katana, rustscan, gau, nikto.
+- Reversing: radare2, upx, jadx, apktool, Detect It Easy, Cutter, x64dbg, dnSpy, Ghidra.
+- Forensics, crypto, stego: exiftool, strings, Sleuth Kit, openssl, CyberChef, steghide.
+- Python tools via pipx: arjun, dirsearch, wfuzz, commix, hashid, NetExec, RsaCtfTool,
+  Volatility 3, ropper, pwntools, theHarvester, Sherlock.
+- Passwords and data: John the Ripper (jumbo), ZAP, SecLists-lite wordlists.
+
+**Engine**
+- pipx installs and `gui` / `web` / `dataset` launch modes.
+- nasrya's own hash-pinned Scoop bucket for unpackaged tools.
+- `{scoop_app}` and `{app:NAME}` placeholders.
+- Automatic Scoop bucket add, with `bucket/pkg` pinning.
+- `verify:` impostor detection (`◐` conflict state).
+- Detection runs in-process and off the UI thread, and PATH changes are picked up live.
+- `.cmd`/`.bat` shims launch correctly.
+
+**Runner and output**
+- Each running tool gets its own stdin pipe, which fixes key races with the dashboard.
+- Streaming survives non-UTF-8 output. CR progress bars and ANSI codes are cleaned.
+- Output pane shows the exact tail with long lines, plus scrollback.
+- Find in output (`f` / `n` / `N`).
+- Per-run log files.
+
+**Dashboard**
+- Tool list filter (`/`), key help overlay (`?`) and a shorter footer.
+- Args prompt with real line editing, history and paste.
+- Built-in hash identifier (`h` / `nasrya hashid`).
+- Tool-name column sized to the longest name.
+
+**Security and hygiene**
+- Never loads `tools.yaml` from the current directory implicitly.
+- Quote-aware argument splitting.
+- Crate renamed to `nasrya`, `Cargo.lock` tracked, `rust-version` declared, clippy clean.
+- Security bucket moved to its new home, `opsqw/scoop-security`.
+</details>
+
+## 🗺️ Roadmap
+
+- [x] Rich catalog: 45 tools across recon, web, passwords, crypto, forensics, stego, reversing, pwn, OSINT and wordlists
+- [x] Scoop bucket auto-add · pipx installs · GUI / web / dataset launch modes · nasrya's own bucket
+- [x] Scrollback, output search, per-run log files
 - [x] Built-in hash identifier
+- [ ] Per-engagement workspaces (scope list, authorization record, audit log)
+- [ ] Scope enforcement before every launch (block, or override with a reason)
+- [ ] Artifact collection (files a tool writes, e.g. `-oX` / `-o`, kept next to the run log)
+- [ ] One-shot report generation (Markdown / HTML)
+- [ ] New tagged release with prebuilt binary
 
-## Credits & prior art
+## 🤝 Contributing
 
-Inspired by the native-toolbox idea of **PentestBox**, the provisioning model of
-**Commando VM / FLARE-VM**, and the package catalogs of the **Scoop** security buckets. Built with
-[ratatui](https://ratatui.rs). Tool curation references
+New tools are the easiest place to start: add a `tools.yaml` entry (and a `bucket/` manifest if
+nobody packages the tool), run `cargo test`, and open a PR. Please only add tools that really
+work natively on Windows, and use `note:` to document any caveats.
+
+## 🙏 Credits & prior art
+
+Inspired by the native-toolbox idea behind **PentestBox**, the provisioning model of
+**Commando VM / FLARE-VM** and the package catalogs of the **Scoop** security buckets. Built with
+[ratatui](https://ratatui.rs). Tool curation draws on
 [awesome-pentest](https://github.com/enaqx/awesome-pentest).
 
-## License
+## 📄 License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE) © nasrya contributors. Each bundled or installed tool keeps its own license.
