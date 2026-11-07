@@ -433,3 +433,12 @@ tools:
     run_cmd: steghide
     args_hint: "info image.jpg"
     note: legacy 2003 Win32 build - still the reference steghide; extract with -sf image.jpg -p <passphrase>
+
+  - name: nikto
+    category: web
+    description: Web server vulnerability scanner
+    exe: nikto
+    scoop: nikto
+    bucket: nasrya
+    run_cmd: nikto
+    args_hint: "-h https://example.com"
