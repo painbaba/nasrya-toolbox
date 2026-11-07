@@ -1,40 +1,42 @@
-/* Design tokens. Dark only. Palette and motion language follow the deep-green /
-   bright-green look the site is modelled on; every colour used anywhere is here. */
+/* Design tokens. Dark only. Colours are Winsploit's Frost look (slate surfaces, icy
+   blue accent; the same palette as the web view and the Iso cube logo, see design/).
+   The scale names are historical: dg-* are the surfaces, bg-* the accent, lg-* text.
+   Every colour used anywhere is here. */
 :root {
-  /* deep green: backgrounds and surfaces */
-  --dg-950: #030809;
-  --dg-900: #050c0d;
-  --dg-800: #061217;
-  --dg-700: #0b191b;
-  --dg-600: #0e1f22;
-  --dg-500: #112529;
-  --dg-450: #1b2f33;
-  --dg-425: #283c40;
-  --dg-400: #3a6063;
-  --dg-300: #6a878a;
+  /* slate: backgrounds and surfaces */
+  --dg-950: #0f1115;
+  --dg-900: #15181e;
+  --dg-800: #191d24;
+  --dg-700: #1e222a;
+  --dg-600: #232831;
+  --dg-500: #282e39;
+  --dg-450: #313844;
+  --dg-425: #3d4552;
+  --dg-400: #546978;
+  --dg-300: #84919f;
 
-  /* bright green: the accent */
-  --bg-100: #c8ffd9;
-  --bg-200: #98feb8;
-  --bg-300: #69fd98;
-  --bg-500: #5eff88;
-  --bg-600: #55e57a;
-  --bg-700: #2a9b5c;
-  --bg-800: #1f7447;
-  --bg-900: #154d32;
+  /* icy blue: the accent (500 = the cube's right face, 700 its left, 200 its top) */
+  --bg-100: #e0f0f5;
+  --bg-200: #c6e3eb;
+  --bg-300: #a9d4df;
+  --bg-500: #89c2d2;
+  --bg-600: #6bb3c7;
+  --bg-700: #46a0b9;
+  --bg-800: #327385;
+  --bg-900: #224d59;
 
   /* light grey: text */
-  --lg-50: #f4fbfb;
-  --lg-100: #e7f6f3;
-  --lg-300: #cde4e7;
-  --lg-500: #a3c0c8;
-  --lg-600: #88a5ac;
-  --lg-700: #6d8a90;
-  --lg-800: #536f74;
+  --lg-50: #f3f4f7;
+  --lg-100: #e4e7ec;
+  --lg-300: #d0d5dd;
+  --lg-500: #acb4be;
+  --lg-600: #949ca8;
+  --lg-700: #7c8592;
+  --lg-800: #646c78;
 
   /* signals */
-  --risk: #ff0015;
-  --risk-soft: #fec8cc;
+  --risk: #ff6b80;
+  --risk-soft: #ffd3d9;
   --warn: #ff9900;
   --amber: #ffdea6;
 
@@ -43,7 +45,7 @@
   --syn-fn: #dfc5a4;
   --syn-str: #f7a881;
   --syn-kw: #fff34a;
-  --syn-com: #536f74;
+  --syn-com: #646c78;
   --win-close: #f96057;
   --win-min: #f8ce52;
   --win-max: #5fcf65;
@@ -59,7 +61,7 @@
   --text-2: var(--lg-500);
   --text-3: var(--lg-700);
   --accent: var(--bg-500);
-  --accent-ink: var(--dg-900);
+  --accent-ink: #0c191d;
   --accent-glow: color-mix(in srgb, var(--bg-500) 35%, transparent);
 
   /* type */

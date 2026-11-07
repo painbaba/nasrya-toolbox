@@ -1,18 +1,26 @@
 <script setup lang="ts">
-// The Winsploit mark: a 7×5 pixel W with a red "risk" pixel.
-const rows = ['X.....X', 'X.....X', 'X..X..X', 'X.X.X.X', '.X...X.'];
-const cells = rows.flatMap((r, y) => [...r].flatMap((c, x) => (c === 'X' ? [{ x: x * 4, y: y * 4 }] : [])));
+// The Winsploit mark: the Iso cube, an isometric cube with a prompt on its top
+// face (32 × 32 grid; paths and colours in design/README.md).
 </script>
 
 <template>
-  <svg class="logo-mark" viewBox="0 0 30 20" aria-hidden="true">
-    <rect v-for="(c, i) in cells" :key="i" :x="c.x" :y="c.y" width="3.4" height="3.4" fill="currentColor" :style="{ '--i': i }" />
-    <rect class="logo-mark__risk" x="26.6" y="16" width="3.4" height="3.4" />
+  <svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true">
+    <path class="logo-mark__left" d="M16 2.5 28 9.3v13.4L16 29.5 4 22.7V9.3z" />
+    <path class="logo-mark__top" d="M16 2.5 28 9.3 16 16 4 9.3z" />
+    <path class="logo-mark__right" d="M16 16 28 9.3v13.4L16 29.5z" />
+    <path class="logo-mark__prompt" d="M10.5 8l3 1.6-3 1.7" />
+    <path class="logo-mark__cursor" d="M15 11.5l3.2 1.8" />
   </svg>
 </template>
 
 <style scoped>
-.logo-mark { width: 30px; height: 20px; color: var(--accent); overflow: visible; flex: none; }
-.logo-mark__risk { fill: var(--risk); animation: risk 2.4s steps(1) infinite; }
-@keyframes risk { 0%, 70% { opacity: 1; } 71%, 85% { opacity: 0; } 86% { opacity: 1; } }
+.logo-mark { width: 26px; height: 26px; overflow: visible; flex: none; }
+.logo-mark__left { fill: var(--bg-700); }
+.logo-mark__top { fill: var(--bg-200); }
+.logo-mark__right { fill: var(--bg-500); }
+.logo-mark__prompt,
+.logo-mark__cursor { fill: none; stroke: var(--accent-ink); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.logo-mark__cursor { animation: blink 1.2s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .logo-mark__cursor { animation: none; } }
 </style>
