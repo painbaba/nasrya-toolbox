@@ -141,3 +141,12 @@ tools:
     scoop: exiftool
     run_cmd: exiftool
     args_hint: "image.jpg"
+
+  - name: strings
+    category: forensics
+    description: Sysinternals Strings - extract ASCII/Unicode text
+    exe: strings
+    scoop: sysinternals
+    run_cmd: strings
+    args_hint: "-accepteula -n 8 target.bin"
+    bucket: extras
