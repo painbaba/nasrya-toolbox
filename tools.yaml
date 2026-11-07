@@ -100,3 +100,11 @@ tools:
     run_cmd: subfinder
     args_hint: "-d example.com"
     bucket: security
+
+  - name: amass
+    category: recon
+    description: In-depth attack-surface / subdomain mapping
+    exe: amass
+    scoop: amass
+    run_cmd: amass
+    args_hint: "enum -passive -d example.com"
