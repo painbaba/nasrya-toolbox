@@ -150,3 +150,11 @@ tools:
     run_cmd: strings
     args_hint: "-accepteula -n 8 target.bin"
     bucket: extras
+
+  - name: radare2
+    category: reversing
+    description: Reverse-engineering framework
+    exe: radare2
+    scoop: radare2
+    run_cmd: radare2
+    args_hint: "-v"
