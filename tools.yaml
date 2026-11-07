@@ -19,6 +19,11 @@
 #   url         http(s) URL opened by launch: web
 #   note        (optional) caveat shown every time the tool is run
 #
+# {scoop_app} in exe / run_cmd / url expands to the tool's Scoop app directory
+# (<scoop root>pps\<scoop>\current). Use it for files Scoop doesn't put on
+# PATH, e.g. exe: '{scoop_app}\dnSpy.exe'. `exe` may be any file that proves the
+# install, and a web tool's url may be a local '{scoop_app}\page.html'.
+#
 # buckets: maps a bucket name to its git URL. Only needed for buckets Scoop
 # doesn't know by name (extras, versions, java, ... need no entry).
 #

@@ -107,14 +107,19 @@ pub fn spawn_detached(mut cmd: Command) -> std::io::Result<u32> {
     Ok(child.id())
 }
 
-/// Open an http(s) URL in the default browser. Goes through
-/// `url.dll,FileProtocolHandler` rather than `cmd /C start`, so characters
-/// like `&` in the URL are never interpreted by a shell.
+/// Open an http(s) URL, or an existing local .html page, in the default
+/// browser. Goes through `url.dll,FileProtocolHandler` rather than
+/// `cmd /C start`, so characters like `&` are never interpreted by a shell.
 pub fn open_url(url: &str) -> std::io::Result<()> {
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
+    let web = url.starts_with("http://") || url.starts_with("https://");
+    let lower = url.to_ascii_lowercase();
+    let page = (lower.ends_with(".html") || lower.ends_with(".htm"))
+        && std::path::Path::new(url).is_absolute()
+        && std::path::Path::new(url).is_file();
+    if !(web || page) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "only http(s) URLs are opened",
+            "only http(s) URLs and existing local .html pages are opened",
         ));
     }
     Command::new("rundll32")

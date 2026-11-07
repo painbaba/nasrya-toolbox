@@ -89,16 +89,56 @@ impl Tool {
         match self.launch {
             Launch::Web => match self.url.as_deref() {
                 None => p.push("launch: web needs a `url:`".into()),
-                Some(u) if !(u.starts_with("http://") || u.starts_with("https://")) => {
-                    p.push(format!("url must be http(s):// (got {u:?})"))
+                Some(u)
+                    if !(u.starts_with("http://")
+                        || u.starts_with("https://")
+                        || is_local_page(u)) =>
+                {
+                    p.push(format!(
+                        "url must be http(s):// or a {SCOOP_APP}\\...html page (got {u:?})"
+                    ))
                 }
                 _ => {}
             },
             _ if self.run_cmd.trim().is_empty() => p.push("`run_cmd:` is required".into()),
             _ => {}
         }
+        let uses_app = [&self.exe, &self.run_cmd]
+            .into_iter()
+            .chain(self.url.as_ref())
+            .any(|s| s.contains(SCOOP_APP));
+        if uses_app && (self.install != Install::Scoop || self.scoop.is_none()) {
+            p.push(format!(
+                "{SCOOP_APP} needs install: scoop with a `scoop:` package"
+            ));
+        }
         p
     }
+
+    /// Replace `{scoop_app}` with this tool's Scoop app directory
+    /// (`<scoop root>\apps\<scoop>\current`) in exe, run_cmd and url.
+    pub fn expand_scoop_app(&mut self, scoop_root: &Path) {
+        let Some(pkg) = self.scoop.as_deref() else {
+            return;
+        };
+        let dir = scoop_root.join("apps").join(pkg).join("current");
+        let dir = dir.to_string_lossy();
+        for field in [&mut self.exe, &mut self.run_cmd] {
+            *field = field.replace(SCOOP_APP, &dir);
+        }
+        if let Some(u) = &mut self.url {
+            *u = u.replace(SCOOP_APP, &dir);
+        }
+    }
+}
+
+/// Placeholder for a Scoop app's install directory, for files Scoop doesn't
+/// put on PATH (dnSpy.exe, CyberChef.html, ...).
+pub const SCOOP_APP: &str = "{scoop_app}";
+
+/// A `launch: web` url may also be a local HTML page inside the app dir.
+fn is_local_page(u: &str) -> bool {
+    u.starts_with(SCOOP_APP) && (u.ends_with(".html") || u.ends_with(".htm"))
 }
 
 /// The whole catalog file.
@@ -185,7 +225,13 @@ pub fn load(path: impl AsRef<Path>) -> Result<Catalog> {
     let path = path.as_ref();
     let text = fs::read_to_string(path)
         .with_context(|| format!("reading tool registry {}", path.display()))?;
-    parse(&text).with_context(|| format!("in {}", path.display()))
+    let mut cat = parse(&text).with_context(|| format!("in {}", path.display()))?;
+    if let Some(root) = crate::scoop::scoop_root() {
+        for t in &mut cat.tools {
+            t.expand_scoop_app(&root);
+        }
+    }
+    Ok(cat)
 }
 
 /// Parse and validate catalog text.
@@ -248,6 +294,42 @@ mod tests {
         ] {
             assert!(msg.contains(needle), "{needle} missing from:\n{msg}");
         }
+    }
+
+    #[test]
+    fn scoop_app_placeholder() {
+        let mut c = parse(
+            "tools:\n\
+             \x20 - {name: dnspy, exe: '{scoop_app}\\dnSpy.exe', scoop: dnspyex, bucket: extras, run_cmd: '{scoop_app}\\dnSpy.exe', launch: gui}\n\
+             \x20 - {name: chef, exe: '{scoop_app}\\CyberChef.html', scoop: cyberchef, launch: web, url: '{scoop_app}\\CyberChef.html'}\n",
+        )
+        .unwrap();
+        let root = Path::new(r"C:\Users\me\scoop");
+        for t in &mut c.tools {
+            t.expand_scoop_app(root);
+        }
+        assert_eq!(
+            c.tools[0].exe,
+            r"C:\Users\me\scoop\apps\dnspyex\current\dnSpy.exe"
+        );
+        assert_eq!(c.tools[0].run_cmd, c.tools[0].exe);
+        assert_eq!(
+            c.tools[1].url.as_deref(),
+            Some(r"C:\Users\me\scoop\apps\cyberchef\current\CyberChef.html")
+        );
+    }
+
+    #[test]
+    fn scoop_app_needs_a_scoop_package() {
+        assert!(parse(
+            "tools:\n  - {name: x, exe: '{scoop_app}\\x.exe', install: pipx, pipx: x, run_cmd: x}\n"
+        )
+        .is_err());
+        // web urls must be http(s) or a local page under {scoop_app}
+        assert!(
+            parse("tools:\n  - {name: x, exe: x, scoop: x, launch: web, url: 'C:\\x.html'}\n")
+                .is_err()
+        );
     }
 
     #[test]

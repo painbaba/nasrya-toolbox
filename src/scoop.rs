@@ -19,7 +19,7 @@ const KNOWN_BUCKETS: &[&str] = &[
 ];
 
 /// Scoop's install root: `$SCOOP`, else `%USERPROFILE%\scoop`.
-fn scoop_root() -> Option<PathBuf> {
+pub fn scoop_root() -> Option<PathBuf> {
     if let Some(s) = std::env::var_os("SCOOP") {
         return Some(PathBuf::from(s));
     }

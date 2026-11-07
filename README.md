@@ -173,6 +173,10 @@ there is one, then opens `url` in your browser:
     url: http://127.0.0.1:5001         # SpiderFoot, ...
 ```
 
+Some apps aren't put on PATH by Scoop (only a Start-menu shortcut), and some are just an HTML
+page. For those, `{scoop_app}` in `exe`, `run_cmd` or `url` expands to the app's Scoop folder:
+`exe: '{scoop_app}\dnSpy.exe'`, or `url: '{scoop_app}\CyberChef.html'` with `launch: web`.
+
 `note:` adds a caveat that's shown every time the tool is run, e.g. a Windows limitation.
 Bad entries (missing `scoop:`/`pipx:`, a web tool without a `url:`, …) are reported together
 when the catalog loads.
