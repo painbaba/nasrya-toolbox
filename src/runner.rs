@@ -4,10 +4,12 @@
 //! grandchildren, so a plain child.kill() is not enough on Windows).
 
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::thread;
+
+use crate::detect;
 
 /// Messages sent from runner threads into the app event loop.
 pub enum AppEvent {
@@ -15,6 +17,8 @@ pub enum AppEvent {
     Output(String),
     /// The process finished with this exit code (None if it was killed/unknown).
     Exited(Option<i32>),
+    /// Background detection finished: one installed/missing flag per tool.
+    Detected(Vec<bool>),
 }
 
 /// Build the command that runs a tool: `program` resolved the way Windows
@@ -80,37 +84,12 @@ pub fn spawn_streaming(mut cmd: Command, tx: Sender<AppEvent>) -> std::io::Resul
 ///
 /// `Command::new("jadx")` only finds `jadx.exe`; it never tries `.cmd`/`.bat`,
 /// and many Scoop shims (jadx, apktool, Python/Java wrappers) are exactly that.
-/// So we ask `where.exe` and take the first hit with a runnable extension.
-/// `where` also lists extensionless shell-script shims (e.g. `jadx` next to
-/// `jadx.cmd`), which Windows cannot execute, so those are skipped.
-/// `$PATH:` limits the search to PATH, so a same-named file in the current
-/// directory is never picked up. Explicit paths and names that already carry
-/// an extension are passed through untouched. std's `Command` runs a resolved
-/// `.bat`/`.cmd` through cmd.exe with safe argument escaping.
+/// So we resolve it with the same PATH x PATHEXT search detection uses
+/// (`detect::resolve`), which also never looks in the current directory, and
+/// launch the full path. std's `Command` runs a resolved `.bat`/`.cmd` through
+/// cmd.exe with safe argument escaping. Falls back to the bare name.
 fn resolve_program(program: &str) -> PathBuf {
-    let given = Path::new(program);
-    if given.extension().is_some() || given.components().count() > 1 {
-        return given.to_path_buf();
-    }
-    let found = Command::new("where.exe")
-        .arg(format!("$PATH:{program}"))
-        .stderr(Stdio::null())
-        .output();
-    if let Ok(out) = found {
-        if out.status.success() {
-            for line in String::from_utf8_lossy(&out.stdout).lines() {
-                let cand = Path::new(line.trim());
-                let ext = cand
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| e.to_ascii_lowercase());
-                if matches!(ext.as_deref(), Some("exe" | "com" | "bat" | "cmd")) {
-                    return cand.to_path_buf();
-                }
-            }
-        }
-    }
-    given.to_path_buf()
+    detect::resolve(program).unwrap_or_else(|| PathBuf::from(program))
 }
 
 /// Kill a process and its whole tree (taskkill /T). Best-effort.

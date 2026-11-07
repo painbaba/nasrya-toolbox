@@ -63,23 +63,42 @@ fn main() -> Result<()> {
     }
 }
 
-/// Locate and load the catalog, warning (on stderr) about an ignored
-/// `.\tools.yaml`.
-fn load_catalog(explicit: Option<&Path>) -> Result<(PathBuf, registry::Catalog)> {
+/// A loaded catalog plus where it came from.
+struct Loaded {
+    path: PathBuf,
+    catalog: registry::Catalog,
+    /// A `.\tools.yaml` that exists but wasn't used (only reported when the
+    /// user didn't pick a catalog explicitly).
+    ignored: Option<PathBuf>,
+}
+
+fn load_catalog(explicit: Option<&Path>) -> Result<Loaded> {
     let path = registry::find_catalog(explicit)?;
-    if let Some(ignored) = registry::ignored_cwd_catalog(&path) {
+    let ignored = match (explicit, std::env::var_os("NASRYA_CATALOG")) {
+        (None, None) => registry::ignored_cwd_catalog(&path),
+        _ => None,
+    };
+    let catalog = registry::load(&path)?;
+    Ok(Loaded {
+        path,
+        catalog,
+        ignored,
+    })
+}
+
+fn list(explicit: Option<&Path>) -> Result<()> {
+    let Loaded {
+        path,
+        catalog: cat,
+        ignored,
+    } = load_catalog(explicit)?;
+    if let Some(ignored) = ignored {
         eprintln!(
             "nasrya: note: ignoring {} (catalogs are never loaded from the current directory \
              implicitly; use --catalog to opt in)",
             ignored.display()
         );
     }
-    let cat = registry::load(&path)?;
-    Ok((path, cat))
-}
-
-fn list(explicit: Option<&Path>) -> Result<()> {
-    let (path, cat) = load_catalog(explicit)?;
     let tools = cat.tools;
     let name_w = tools
         .iter()
@@ -95,15 +114,12 @@ fn list(explicit: Option<&Path>) -> Result<()> {
     // Write through a locked handle and stop quietly if the reader goes away
     // (`nasrya list | Select-Object -First 5`), instead of panicking like
     // println! does on a closed pipe.
+    let found = detect::installed_all(&tools.iter().map(|t| &t.exe).collect::<Vec<_>>());
     let mut out = std::io::stdout().lock();
     let res = (|| -> std::io::Result<()> {
         writeln!(out, "nasrya — {} tools  ({})", tools.len(), path.display())?;
-        for t in &tools {
-            let installed = if detect::is_installed(&t.exe) {
-                "installed"
-            } else {
-                "missing"
-            };
+        for (t, ok) in tools.iter().zip(found) {
+            let installed = if ok { "installed" } else { "missing" };
             writeln!(
                 out,
                 "  {:<name_w$} [{:<cat_w$}] {:<9} {}",
@@ -121,13 +137,17 @@ fn list(explicit: Option<&Path>) -> Result<()> {
 }
 
 fn run_tui(explicit: Option<&Path>) -> Result<()> {
-    let (path, catalog) = load_catalog(explicit)?;
+    let Loaded {
+        path,
+        catalog,
+        ignored,
+    } = load_catalog(explicit)?;
     if catalog.tools.is_empty() {
         eprintln!("nasrya: no tools found in {}", path.display());
         return Ok(());
     }
     let mut terminal = ratatui::init();
-    let result = App::new(catalog, path).run(&mut terminal);
+    let result = App::new(catalog, path, ignored).run(&mut terminal);
     ratatui::restore();
     result
 }

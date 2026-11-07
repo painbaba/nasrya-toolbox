@@ -12,7 +12,7 @@ use ratatui::DefaultTerminal;
 use crate::args;
 use crate::banner;
 use crate::detect;
-use crate::registry::{self, Catalog, Tool};
+use crate::registry::{Catalog, Tool};
 use crate::runner::{self, AppEvent};
 use crate::scoop;
 use crate::ui;
@@ -48,6 +48,10 @@ pub struct App {
     pub running_pid: Option<u32>,
     pub status_line: String,
     pub tick: u64,
+    /// A background detection pass is in flight.
+    detecting: bool,
+    /// The running process is a scoop install (so re-detect when it exits).
+    installing: bool,
     screen: Screen,
     tx: Sender<AppEvent>,
     rx: Receiver<AppEvent>,
@@ -55,7 +59,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(catalog: Catalog, catalog_path: PathBuf) -> Self {
+    pub fn new(catalog: Catalog, catalog_path: PathBuf, ignored: Option<PathBuf>) -> Self {
         let Catalog { tools, buckets } = catalog;
         let (tx, rx) = mpsc::channel();
         let n = tools.len();
@@ -64,7 +68,7 @@ impl App {
             ":: Enter runs the highlighted tool · i installs it via scoop.".into(),
             format!(":: catalog: {}", catalog_path.display()),
         ];
-        if let Some(ignored) = registry::ignored_cwd_catalog(&catalog_path) {
+        if let Some(ignored) = ignored {
             output.push(format!(
                 "[err] ignored {} — catalogs aren't loaded from the current directory \
                  unless you pass --catalog",
@@ -83,6 +87,8 @@ impl App {
             running_pid: None,
             status_line: "detecting tools…".into(),
             tick: 0,
+            detecting: false,
+            installing: false,
             screen: Screen::Splash,
             tx,
             rx,
@@ -118,23 +124,39 @@ impl App {
         Ok(())
     }
 
+    /// Re-probe every tool on a background thread; the result comes back as
+    /// `AppEvent::Detected`, so the UI keeps drawing meanwhile.
     fn detect_all(&mut self) {
-        let results: Vec<ToolStatus> = self
-            .tools
-            .iter()
-            .map(|t| {
-                if detect::is_installed(&t.exe) {
+        if self.detecting {
+            return;
+        }
+        self.detecting = true;
+        self.status_line = "detecting tools…".into();
+        let exes: Vec<String> = self.tools.iter().map(|t| t.exe.clone()).collect();
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let found = detect::installed_all(&exes);
+            let _ = tx.send(AppEvent::Detected(found));
+        });
+    }
+
+    fn on_detected(&mut self, found: Vec<bool>) {
+        self.detecting = false;
+        self.status = found
+            .into_iter()
+            .map(|ok| {
+                if ok {
                     ToolStatus::Installed
                 } else {
                     ToolStatus::Missing
                 }
             })
             .collect();
-        let installed = results
+        let installed = self
+            .status
             .iter()
             .filter(|s| **s == ToolStatus::Installed)
             .count();
-        self.status = results;
         self.status_line = format!("{installed}/{} tools installed", self.tools.len());
     }
 
@@ -157,9 +179,13 @@ impl App {
                     Some(c) => self.push(format!("── process exited (code {c}) ──")),
                     None => self.push("── process ended ──".to_string()),
                 }
-                // installs/uninstalls can change what's on PATH
-                self.detect_all();
+                // Only an install can change what's on PATH; a plain tool run
+                // doesn't need a re-probe.
+                if std::mem::take(&mut self.installing) {
+                    self.detect_all();
+                }
             }
+            AppEvent::Detected(found) => self.on_detected(found),
         }
     }
 
@@ -220,11 +246,15 @@ impl App {
     }
 
     fn launch(&mut self, args_str: &str) {
-        let installed = self.status[self.selected] == ToolStatus::Installed;
+        let status = self.status[self.selected];
         let name = self.tools[self.selected].name.clone();
         let cmd = self.tools[self.selected].run_cmd.clone();
 
-        if !installed {
+        if status == ToolStatus::Unknown {
+            self.status_line = "still detecting tools — try again in a moment".into();
+            return;
+        }
+        if status != ToolStatus::Installed {
             self.push(format!(
                 "'{name}' is not installed — press i to install it first."
             ));
@@ -259,7 +289,7 @@ impl App {
         let name = self.tools[self.selected].name.clone();
         let bucket = self.tools[self.selected].bucket.clone();
 
-        if !detect::is_installed("scoop") {
+        if detect::resolve("scoop").is_none() {
             self.push("[err] scoop isn't installed (or not on PATH). Install it first:");
             self.push("[err]   irm get.scoop.sh | iex      (in PowerShell; see https://scoop.sh)");
             return;
@@ -289,6 +319,7 @@ impl App {
             Ok(pid) => {
                 self.running = true;
                 self.running_pid = Some(pid);
+                self.installing = true;
                 self.status_line = format!("installing {name}…");
             }
             Err(e) => self.push(format!("failed to start scoop: {e}")),
