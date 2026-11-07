@@ -89,13 +89,19 @@ git clone https://github.com/tahabenissa/nasrya-toolbox
 cd nasrya-toolbox
 cargo build --release
 
-# 3. Make `winsploit` a command (adds target\release to your user PATH, no admin)
-.\target\release\winsploit setup --path
+# 3. Make `winsploit` a command (adds target\release to your user PATH, no admin), and add a
+#    Start menu entry + Windows Terminal profile with the Winsploit icon
+.\target\release\winsploit setup --path --shortcut
 
 # 4. Open a new terminal, go to where you work, and launch it
 cd C:\ctf\some-box
 winsploit
 ```
+
+The **Winsploit** Start menu entry (search it, or pin it to the taskbar or Start) opens a Windows
+Terminal tab with the cube icon and Frost colours; while it runs, the tab title shows
+`winsploit · <folder>`. A program running inside Windows Terminal always shows Terminal's own
+taskbar button, so pin the Start menu entry to get the cube there.
 
 Tools run in the folder you started Winsploit from. `winsploit -C <folder>` starts somewhere else,
 and `d` in the dashboard changes it like `cd` (see [Working folder](#working-folder)). After a

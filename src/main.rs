@@ -30,6 +30,7 @@ mod sandbox;
 mod scoop;
 mod session;
 mod setup;
+mod shortcut;
 mod theme;
 mod tls;
 mod ui;
@@ -137,18 +138,23 @@ fn main() -> Result<()> {
             let flags = &args[1..];
             if let Some(bad) = flags
                 .iter()
-                .find(|a| !["--buckets", "--pipx", "--path"].contains(&a.as_str()))
+                .find(|a| !["--buckets", "--pipx", "--path", "--shortcut"].contains(&a.as_str()))
             {
                 eprintln!("winsploit: setup: unknown option '{bad}'");
                 std::process::exit(2);
             }
             let buckets = flags.iter().any(|a| a == "--buckets");
             let pipx = flags.iter().any(|a| a == "--pipx");
-            if flags.iter().any(|a| a == "--path") {
+            let path = flags.iter().any(|a| a == "--path");
+            let shortcut = flags.iter().any(|a| a == "--shortcut");
+            if path {
                 add_self_to_path();
-                if !buckets && !pipx {
-                    return Ok(());
-                }
+            }
+            if shortcut {
+                add_shortcuts();
+            }
+            if (path || shortcut) && !buckets && !pipx {
+                return Ok(());
             }
             let Loaded { catalog, .. } = load_catalog(catalog.as_deref())?;
             if let Err(e) = setup::run(&catalog, buckets, pipx) {
@@ -313,6 +319,9 @@ fn run_tui(explicit: Option<&Path>, web: WebOpts) -> Result<()> {
         eprintln!("winsploit: no tools found in {}", path.display());
         return Ok(());
     }
+    // the tab / window title says winsploit while it runs (the run loop keeps
+    // the working folder in it); the shell's own title comes back on exit
+    let old_title = shortcut::title();
     let mut terminal = ratatui::init();
     // Bracketed paste: a pasted command line arrives as one Event::Paste
     // instead of keystrokes that could trigger key bindings. Best-effort.
@@ -335,6 +344,9 @@ fn run_tui(explicit: Option<&Path>, web: WebOpts) -> Result<()> {
     let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
     let _ = execute!(std::io::stdout(), event::DisableBracketedPaste);
     ratatui::restore();
+    if let Some(t) = old_title {
+        shortcut::set_title(&t);
+    }
     result
 }
 
@@ -373,6 +385,43 @@ fn add_self_to_path() {
     }
 }
 
+/// `winsploit setup --shortcut`: a Windows Terminal profile with the cube
+/// icon and a Start menu entry for this winsploit.exe.
+fn add_shortcuts() {
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("winsploit: setup --shortcut: can't tell where winsploit.exe is: {e}");
+            std::process::exit(1);
+        }
+    };
+    match shortcut::install(&exe) {
+        Ok(done) => {
+            println!(
+                "Start menu: {}\n  search \"{}\" or right-click it > Pin to taskbar / Start",
+                done.start_menu.display(),
+                shortcut::NAME
+            );
+            println!(
+                "Windows Terminal profile: {}\n  {} in Terminal's v menu, with the cube on its tab",
+                done.fragment.display(),
+                shortcut::NAME
+            );
+            if !done.via_terminal {
+                println!("  (Windows Terminal isn't installed: the shortcut starts winsploit.exe directly)");
+            }
+            println!(
+                "To remove them, delete those two files (and {}).",
+                done.icon.display()
+            );
+        }
+        Err(e) => {
+            eprintln!("winsploit: setup --shortcut: {e:#}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn print_help() {
     println!(
         "{}\n\
@@ -383,7 +432,8 @@ USAGE:\n\
     winsploit hashid <hash>...           identify hash types (+ hashcat / john modes)\n\
     winsploit --help                     show this help\n\
     winsploit --version                  show version\n\
-    winsploit setup --path               put this winsploit.exe on your PATH (no admin)\n\n\
+    winsploit setup --path               put this winsploit.exe on your PATH (no admin)\n\
+    winsploit setup --shortcut           Start menu entry + Windows Terminal profile, with the cube icon\n\n\
 WORKING FOLDER (where tools run, like a shell's current folder):\n\
     winsploit -C <folder>                start in <folder> (default: where you start winsploit)\n\
     In the dashboard: d changes it, like cd: Tab completes, .. ~ - and %VARS% work,\n\
