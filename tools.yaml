@@ -302,3 +302,12 @@ tools:
     run_cmd: theHarvester
     args_hint: "-d example.com -b duckduckgo"
     note: needs Python 3.14+ (pipx uses the Python it runs on)
+
+  - name: sherlock
+    category: osint
+    description: Hunt usernames across social networks
+    exe: sherlock
+    install: pipx
+    pipx: sherlock-project
+    run_cmd: sherlock
+    args_hint: "username"
