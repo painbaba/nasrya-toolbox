@@ -16,6 +16,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+pub use crate::registry::Verify;
+
 /// Extensions `std::process::Command` can launch, in Windows' default order.
 const RUNNABLE: &[&str] = &[".com", ".exe", ".bat", ".cmd"];
 
@@ -111,12 +113,94 @@ pub fn resolve(exe: &str) -> Option<PathBuf> {
     PathIndex::from_env().resolve(exe)
 }
 
-/// Is each of `exes` installed? One PATH snapshot for the whole batch.
-pub fn installed_all<S: AsRef<str>>(exes: &[S]) -> Vec<bool> {
+/// What detection found for one tool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Found {
+    Missing,
+    Installed(PathBuf),
+    /// Something with the right name is on PATH, but its `verify` check
+    /// says it's a different program (e.g. Python's httpx instead of
+    /// ProjectDiscovery's).
+    Conflict(PathBuf),
+}
+
+/// Probe a batch of tools with one PATH snapshot, running `verify` checks
+/// where the catalog asks for them.
+pub fn probe_all(tools: &[(String, Option<Verify>)]) -> Vec<Found> {
     let idx = PathIndex::from_env();
-    exes.iter()
-        .map(|e| idx.resolve(e.as_ref()).is_some())
+    tools
+        .iter()
+        .map(|(exe, verify)| match idx.resolve(exe) {
+            None => Found::Missing,
+            Some(path) => match verify {
+                Some(v) if !verify_matches(&path, v) => Found::Conflict(path),
+                _ => Found::Installed(path),
+            },
+        })
         .collect()
+}
+
+/// Run `path <verify.args>` (3 s timeout) and check that its combined
+/// output contains `verify.contains`, case-insensitively.
+fn verify_matches(path: &Path, v: &Verify) -> bool {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let Ok(args) = crate::args::split(&v.args) else {
+        return false;
+    };
+    let Ok(mut child) = Command::new(path)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    else {
+        return false;
+    };
+    // Read both pipes on threads so a chatty tool can't block on a full pipe.
+    let mut out = child.stdout.take();
+    let mut err = child.stderr.take();
+    let t_out = std::thread::spawn(move || {
+        let mut s = Vec::new();
+        if let Some(o) = out.as_mut() {
+            let _ = o.read_to_end(&mut s);
+        }
+        s
+    });
+    let t_err = std::thread::spawn(move || {
+        let mut s = Vec::new();
+        if let Some(e) = err.as_mut() {
+            let _ = e.read_to_end(&mut s);
+        }
+        s
+    });
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                // Kill the whole tree: for a .cmd shim, killing only cmd.exe
+                // would leave the real program holding our pipes open, and
+                // the reader threads below would never finish.
+                let _ = Command::new("taskkill")
+                    .args(["/T", "/F", "/PID", &child.id().to_string()])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+                let _ = child.kill();
+                let _ = child.wait();
+                break;
+            }
+        }
+    }
+    let mut text = t_out.join().unwrap_or_default();
+    text.extend(t_err.join().unwrap_or_default());
+    String::from_utf8_lossy(&text)
+        .to_lowercase()
+        .contains(&v.contains.to_lowercase())
 }
 
 #[cfg(test)]

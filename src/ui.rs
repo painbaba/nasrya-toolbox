@@ -94,6 +94,7 @@ fn render_tool_list(f: &mut Frame, app: &App, area: Rect) {
                 ToolStatus::Installed => ("●", GREEN),
                 ToolStatus::Missing => ("○", RED),
                 ToolStatus::Unknown => ("·", DIM),
+                ToolStatus::Conflict => ("◐", YELLOW),
             };
             let name_style = Style::default().fg(FG).add_modifier(Modifier::BOLD);
             let line = Line::from(vec![

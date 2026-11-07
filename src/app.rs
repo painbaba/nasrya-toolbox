@@ -26,6 +26,8 @@ pub enum ToolStatus {
     Unknown,
     Installed,
     Missing,
+    /// the exe on PATH failed its `verify` check (a same-named program)
+    Conflict,
 }
 
 #[derive(PartialEq, Eq)]
@@ -47,6 +49,8 @@ pub struct App {
     pub tools: Vec<Tool>,
     buckets: BTreeMap<String, String>,
     pub status: Vec<ToolStatus>,
+    /// For tools in Conflict: the path of the program that's actually found.
+    conflicts: Vec<Option<PathBuf>>,
     pub selected: usize,
     pub output: Vec<String>,
     pub mode: Mode,
@@ -87,6 +91,7 @@ impl App {
             tools,
             buckets,
             status: vec![ToolStatus::Unknown; n],
+            conflicts: vec![None; n],
             selected: 0,
             output,
             mode: Mode::Browsing,
@@ -146,7 +151,11 @@ impl App {
         }
         self.detecting = true;
         self.status_line = "detecting tools…".into();
-        let exes: Vec<String> = self.tools.iter().map(|t| t.exe.clone()).collect();
+        let probes: Vec<(String, Option<detect::Verify>)> = self
+            .tools
+            .iter()
+            .map(|t| (t.exe.clone(), t.verify.clone()))
+            .collect();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             if refresh_path {
@@ -154,29 +163,34 @@ impl App {
                     let _ = tx.send(AppEvent::Output(format!(":: PATH: picked up {dir}")));
                 }
             }
-            let found = detect::installed_all(&exes);
+            let found = detect::probe_all(&probes);
             let _ = tx.send(AppEvent::Detected(found));
         });
     }
 
-    fn on_detected(&mut self, found: Vec<bool>) {
+    fn on_detected(&mut self, found: Vec<detect::Found>) {
         self.detecting = false;
+        self.conflicts = vec![None; found.len()];
         self.status = found
             .into_iter()
-            .map(|ok| {
-                if ok {
-                    ToolStatus::Installed
-                } else {
-                    ToolStatus::Missing
+            .enumerate()
+            .map(|(i, f)| match f {
+                detect::Found::Installed(_) => ToolStatus::Installed,
+                detect::Found::Missing => ToolStatus::Missing,
+                detect::Found::Conflict(p) => {
+                    self.conflicts[i] = Some(p);
+                    ToolStatus::Conflict
                 }
             })
             .collect();
-        let installed = self
-            .status
-            .iter()
-            .filter(|s| **s == ToolStatus::Installed)
-            .count();
+        let count = |s: ToolStatus| self.status.iter().filter(|x| **x == s).count();
+        let installed = count(ToolStatus::Installed);
+        let conflicts = count(ToolStatus::Conflict);
         self.status_line = format!("{installed}/{} tools installed", self.tools.len());
+        if conflicts > 0 {
+            self.status_line
+                .push_str(&format!(" · {conflicts} name conflict(s)"));
+        }
     }
 
     fn push(&mut self, line: impl Into<String>) {
@@ -331,6 +345,22 @@ impl App {
 
         if status == ToolStatus::Unknown {
             self.status_line = "still detecting tools — try again in a moment".into();
+            return;
+        }
+        if status == ToolStatus::Conflict {
+            let path = self.conflicts[self.selected]
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            self.push(format!(
+                "[err] the '{}' on PATH ({path}) isn't {name} — a different program with \
+                 the same name comes first. Not running it.",
+                self.tools[self.selected].exe
+            ));
+            self.push(
+                "[err] fix: press i to install the right one, or move its folder earlier in PATH \
+                 (or uninstall the other program), then press r.",
+            );
             return;
         }
         if status != ToolStatus::Installed {

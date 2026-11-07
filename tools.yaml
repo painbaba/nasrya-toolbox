@@ -18,6 +18,9 @@
 #               started detached) | web (start run_cmd if any, then open `url`)
 #   url         http(s) URL opened by launch: web
 #   note        (optional) caveat shown every time the tool is run
+#   verify      (optional) { args: "-version", contains: "text" }: run exe with args at
+#               detection time (3 s timeout); if the output lacks the text, the exe on
+#               PATH is a different program with the same name -> shown as a conflict
 #
 # {scoop_app} in exe / run_cmd / url expands to the tool's Scoop app directory
 # (<scoop root>\apps\<scoop>\current). Use it for files Scoop doesn't put on
@@ -110,6 +113,8 @@ tools:
     run_cmd: httpx
     args_hint: "-u https://example.com -title -status-code"
     bucket: security
+    # Python's httpx package ships an 'httpx' CLI too; make sure we found PD's
+    verify: { args: "-version", contains: "projectdiscovery" }
 
   - name: subfinder
     category: recon

@@ -17,8 +17,8 @@ pub enum AppEvent {
     Output(String),
     /// The process finished with this exit code (None if it was killed/unknown).
     Exited(Option<i32>),
-    /// Background detection finished: one installed/missing flag per tool.
-    Detected(Vec<bool>),
+    /// Background detection finished: one result per tool.
+    Detected(Vec<detect::Found>),
 }
 
 /// Build the command that runs a tool: `program` resolved the way Windows

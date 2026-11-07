@@ -140,17 +140,34 @@ fn list(explicit: Option<&Path>) -> Result<()> {
     // A shell opened before an install still has the old PATH; look at the
     // persisted one too, as the dashboard does on `r`.
     envpath::refresh();
-    let found = detect::installed_all(&tools.iter().map(|t| &t.exe).collect::<Vec<_>>());
+    let probes: Vec<_> = tools
+        .iter()
+        .map(|t| (t.exe.clone(), t.verify.clone()))
+        .collect();
+    let found = detect::probe_all(&probes);
     let mut out = std::io::stdout().lock();
     let res = (|| -> std::io::Result<()> {
         writeln!(out, "nasrya — {} tools  ({})", tools.len(), path.display())?;
-        for (t, ok) in tools.iter().zip(found) {
-            let installed = if ok { "installed" } else { "missing" };
+        for (t, f) in tools.iter().zip(found) {
+            let state = match &f {
+                detect::Found::Installed(_) => "installed",
+                detect::Found::Missing => "missing",
+                detect::Found::Conflict(_) => "CONFLICT",
+            };
             writeln!(
                 out,
                 "  {:<name_w$} [{:<cat_w$}] {:<9} {}",
-                t.name, t.category, installed, t.description
+                t.name, t.category, state, t.description
             )?;
+            if let detect::Found::Conflict(p) = f {
+                writeln!(
+                    out,
+                    "  {:<name_w$}   ^ {} is a different program named '{}'",
+                    "",
+                    p.display(),
+                    t.exe
+                )?;
+            }
         }
         out.flush()
     })();

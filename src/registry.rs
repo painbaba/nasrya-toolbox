@@ -70,6 +70,18 @@ pub struct Tool {
     /// Caveat shown when the tool is run (e.g. Windows limitations).
     #[serde(default)]
     pub note: Option<String>,
+    /// Check that the `exe` found on PATH is really this tool, not another
+    /// program with the same name.
+    #[serde(default)]
+    pub verify: Option<Verify>,
+}
+
+/// `exe <args>` must print something containing `contains` (any case, on
+/// stdout or stderr) within a few seconds.
+#[derive(Debug, Deserialize, Clone)]
+pub struct Verify {
+    pub args: String,
+    pub contains: String,
 }
 
 impl Tool {

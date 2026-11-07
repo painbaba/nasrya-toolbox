@@ -184,6 +184,11 @@ Some apps aren't put on PATH by Scoop (only a Start-menu shortcut), and some are
 page. For those, `{scoop_app}` in `exe`, `run_cmd` or `url` expands to the app's Scoop folder:
 `exe: '{scoop_app}\dnSpy.exe'`, or `url: '{scoop_app}\CyberChef.html'` with `launch: web`.
 
+Some names are shared by unrelated programs (ProjectDiscovery's `httpx` and the Python
+`httpx` CLI, Sysinternals `strings` and GNU `strings`). `verify:` checks that the `exe` found on
+PATH is the right one: `verify: { args: "-version", contains: "projectdiscovery" }`. If it
+isn't, the tool shows as a conflict (`◐`), along with the path that won, and won't be launched.
+
 `note:` adds a caveat that's shown every time the tool is run, e.g. a Windows limitation.
 Bad entries (missing `scoop:`/`pipx:`, a web tool without a `url:`, …) are reported together
 when the catalog loads.
