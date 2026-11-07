@@ -10,6 +10,7 @@ mod app;
 mod args;
 mod banner;
 mod detect;
+mod envpath;
 mod registry;
 mod runner;
 mod scoop;
@@ -114,6 +115,9 @@ fn list(explicit: Option<&Path>) -> Result<()> {
     // Write through a locked handle and stop quietly if the reader goes away
     // (`nasrya list | Select-Object -First 5`), instead of panicking like
     // println! does on a closed pipe.
+    // A shell opened before an install still has the old PATH; look at the
+    // persisted one too, as the dashboard does on `r`.
+    envpath::refresh();
     let found = detect::installed_all(&tools.iter().map(|t| &t.exe).collect::<Vec<_>>());
     let mut out = std::io::stdout().lock();
     let res = (|| -> std::io::Result<()> {

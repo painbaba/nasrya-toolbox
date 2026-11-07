@@ -12,6 +12,7 @@ use ratatui::DefaultTerminal;
 use crate::args;
 use crate::banner;
 use crate::detect;
+use crate::envpath;
 use crate::registry::{Catalog, Tool};
 use crate::runner::{self, AppEvent};
 use crate::scoop;
@@ -97,7 +98,7 @@ impl App {
     }
 
     pub fn run(mut self, terminal: &mut DefaultTerminal) -> Result<()> {
-        self.detect_all();
+        self.detect_all(false);
         while !self.quit {
             terminal.draw(|f| match self.screen {
                 Screen::Splash => banner::render_splash(f, self.tick),
@@ -125,8 +126,10 @@ impl App {
     }
 
     /// Re-probe every tool on a background thread; the result comes back as
-    /// `AppEvent::Detected`, so the UI keeps drawing meanwhile.
-    fn detect_all(&mut self) {
+    /// `AppEvent::Detected`, so the UI keeps drawing meanwhile. With
+    /// `refresh_path`, first pick up PATH changes persisted since nasrya
+    /// started (installs that add a PATH entry, a freshly installed Scoop).
+    fn detect_all(&mut self, refresh_path: bool) {
         if self.detecting {
             return;
         }
@@ -135,6 +138,11 @@ impl App {
         let exes: Vec<String> = self.tools.iter().map(|t| t.exe.clone()).collect();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
+            if refresh_path {
+                for dir in envpath::refresh() {
+                    let _ = tx.send(AppEvent::Output(format!(":: PATH: picked up {dir}")));
+                }
+            }
             let found = detect::installed_all(&exes);
             let _ = tx.send(AppEvent::Detected(found));
         });
@@ -182,7 +190,7 @@ impl App {
                 // Only an install can change what's on PATH; a plain tool run
                 // doesn't need a re-probe.
                 if std::mem::take(&mut self.installing) {
-                    self.detect_all();
+                    self.detect_all(true);
                 }
             }
             AppEvent::Detected(found) => self.on_detected(found),
@@ -209,7 +217,7 @@ impl App {
                     self.selected += 1;
                 }
             }
-            KeyCode::Char('r') => self.detect_all(),
+            KeyCode::Char('r') => self.detect_all(true),
             KeyCode::Char('i') => self.install_selected(),
             KeyCode::Char('c') => self.cancel(),
             KeyCode::Enter => {
