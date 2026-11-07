@@ -108,3 +108,12 @@ tools:
     scoop: amass
     run_cmd: amass
     args_hint: "enum -passive -d example.com"
+
+  - name: katana
+    category: web
+    description: Next-gen web crawler / spider
+    exe: katana
+    scoop: katana
+    run_cmd: katana
+    args_hint: "-u https://example.com"
+    bucket: security
