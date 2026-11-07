@@ -1335,6 +1335,11 @@ impl App {
     fn on_key_input(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        // Windows reports AltGr as Ctrl+Alt: on AZERTY, QWERTZ and many other
+        // layouts that's how \ { } [ ] @ # | ~ are typed (and how pasted
+        // text containing them arrives). Those are text, not shortcuts.
+        let altgr = ctrl && alt;
+        let ctrl = ctrl && !altgr;
         let e = &mut self.editor;
         match key.code {
             KeyCode::Esc if self.mode == Mode::Filter => {
@@ -1418,6 +1423,7 @@ impl App {
             KeyCode::Char('w') if ctrl => e.delete_word_left(),
             KeyCode::Char('a') if ctrl => e.home(),
             KeyCode::Char('e') if ctrl => e.end(),
+            KeyCode::Char(c) if altgr => e.insert(c),
             // other Ctrl/Alt chords aren't text
             KeyCode::Char(_) if ctrl || alt => {}
             KeyCode::Char(c) => e.insert(c),
@@ -2524,6 +2530,28 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("Containers-DisposableClientVM")));
         }
+    }
+
+    #[test]
+    fn altgr_characters_are_typed_not_dropped() {
+        let mut a = app();
+        a.mode = Mode::Input;
+        a.editor.set("");
+        let altgr = KeyModifiers::CONTROL | KeyModifiers::ALT;
+        for c in "C:\\ctf\\a{b}[c]@#|~".chars() {
+            let m = if c.is_ascii_alphanumeric() || c == ':' {
+                KeyModifiers::NONE
+            } else {
+                altgr
+            };
+            a.on_key(KeyEvent::new(KeyCode::Char(c), m));
+        }
+        assert_eq!(a.editor.text(), "C:\\ctf\\a{b}[c]@#|~");
+        // plain Ctrl shortcuts still work, and Alt alone still isn't text
+        a.on_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT));
+        assert_eq!(a.editor.text(), "C:\\ctf\\a{b}[c]@#|~");
+        a.on_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(a.editor.text(), "", "Ctrl+U clears to the start");
     }
 
     #[test]
