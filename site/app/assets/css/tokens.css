@@ -1,0 +1,81 @@
+/* Design tokens. Dark only. Palette and motion language follow the deep-green /
+   bright-green look the site is modelled on; every colour used anywhere is here. */
+:root {
+  /* deep green: backgrounds and surfaces */
+  --dg-950: #030809;
+  --dg-900: #050c0d;
+  --dg-800: #061217;
+  --dg-700: #0b191b;
+  --dg-600: #0e1f22;
+  --dg-500: #112529;
+  --dg-450: #1b2f33;
+  --dg-425: #283c40;
+  --dg-400: #3a6063;
+  --dg-300: #6a878a;
+
+  /* bright green: the accent */
+  --bg-100: #c8ffd9;
+  --bg-200: #98feb8;
+  --bg-300: #69fd98;
+  --bg-500: #5eff88;
+  --bg-600: #55e57a;
+  --bg-700: #2a9b5c;
+  --bg-800: #1f7447;
+  --bg-900: #154d32;
+
+  /* light grey: text */
+  --lg-50: #f4fbfb;
+  --lg-100: #e7f6f3;
+  --lg-300: #cde4e7;
+  --lg-500: #a3c0c8;
+  --lg-600: #88a5ac;
+  --lg-700: #6d8a90;
+  --lg-800: #536f74;
+
+  /* signals */
+  --risk: #ff0015;
+  --risk-soft: #fec8cc;
+  --warn: #ff9900;
+  --amber: #ffdea6;
+
+  /* code */
+  --syn-key: #569cd6;
+  --syn-fn: #dfc5a4;
+  --syn-str: #f7a881;
+  --syn-kw: #fff34a;
+  --syn-com: #536f74;
+  --win-close: #f96057;
+  --win-min: #f8ce52;
+  --win-max: #5fcf65;
+
+  /* semantic */
+  --bg: var(--dg-900);
+  --surface: var(--dg-700);
+  --surface-2: var(--dg-600);
+  --surface-3: var(--dg-500);
+  --line: color-mix(in srgb, var(--lg-50) 9%, transparent);
+  --line-strong: color-mix(in srgb, var(--lg-50) 16%, transparent);
+  --text: var(--lg-50);
+  --text-2: var(--lg-500);
+  --text-3: var(--lg-700);
+  --accent: var(--bg-500);
+  --accent-ink: var(--dg-900);
+  --accent-glow: color-mix(in srgb, var(--bg-500) 35%, transparent);
+
+  /* type */
+  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
+  --font-pixel: 'Silkscreen', 'Geist Mono', monospace;
+
+  /* motion */
+  --ease-out: cubic-bezier(.23, 1, .32, 1);
+  --ease-io: cubic-bezier(.86, 0, .07, 1);
+  --ease-expo: cubic-bezier(.19, 1, .22, 1);
+
+  /* layout */
+  --gutter: clamp(16px, 4vw, 48px);
+  --maxw: 1360px;
+  --radius: 4px;
+  --radius-lg: 10px;
+  --nav-h: 68px;
+}

@@ -11,3 +11,12 @@ Thumbs.db
 .DS_Store
 .vscode/
 .idea/
+
+# website (site/): dependencies, build output, generated data
+/site/node_modules/
+/site/.nuxt/
+/site/.output/
+/site/dist/
+/site/.data/
+/site/app/data/catalog.json
+/site/public/demo/
