@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#282e39" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f4f6" media="(prefers-color-scheme: light)">
 <title>Winsploit</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/app.css">
@@ -91,9 +93,9 @@
       <kbd>/</kbd>
     </div>
     <div class="cats-wrap" id="cats-wrap">
-      <button type="button" class="cats-arrow prev" id="cats-prev" tabindex="-1" aria-label="Scroll categories left" hidden><svg viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></svg></button>
+      <button type="button" class="cats-arrow prev" id="cats-prev" tabindex="-1" aria-label="Scroll categories left" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>
       <nav class="cats" id="cats" aria-label="Categories"></nav>
-      <button type="button" class="cats-arrow next" id="cats-next" tabindex="-1" aria-label="Scroll categories right" hidden><svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></button>
+      <button type="button" class="cats-arrow next" id="cats-next" tabindex="-1" aria-label="Scroll categories right" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
     </div>
     <div class="cat-row">
       <p class="cat-blurb" id="cat-blurb"></p>
@@ -137,7 +139,7 @@
         <select id="recipe" class="recipe-pick" aria-label="Recipe" title="Recipes fill the arguments from the active challenge" hidden></select>
         <label class="args" id="args-wrap">
           <span class="prompt" id="t-cmd">$</span>
-          <input id="args" spellcheck="false" placeholder="arguments" aria-label="Arguments"
+          <input id="args" spellcheck="false" placeholder="arguments…" aria-label="Arguments"
             role="combobox" aria-autocomplete="list" aria-controls="suggest" aria-expanded="false">
           <kbd class="args-kbd" title="Suggestions: Ctrl+Space, or start typing a flag">Ctrl+Space</kbd>
         </label>
@@ -170,7 +172,7 @@
   <form id="hash-form" autocomplete="off">
     <h2 id="hash-title">Identify a hash</h2>
     <p>Built in and offline. The matching formats, with their hashcat and John modes, appear in the console.</p>
-    <input id="hash" placeholder="5f4dcc3b5aa765d61d8327deb882cf99" spellcheck="false" aria-label="Hash">
+    <input id="hash" name="hash" placeholder="5f4dcc3b5aa765d61d8327deb882cf99" spellcheck="false" aria-label="Hash">
     <div class="dialog-actions">
       <button type="button" class="btn ghost" data-close>Cancel</button>
       <button type="submit" class="btn primary" data-action="hashid">Identify</button>
@@ -333,13 +335,13 @@
       <div class="find single-only">
         <input class="find-input" type="search" placeholder="Find" spellcheck="false" aria-label="Find in output">
         <span class="find-count"></span>
-        <button type="button" class="icon-btn sm find-prev" title="Older match (Enter)" aria-label="Older match"><svg viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></svg></button>
-        <button type="button" class="icon-btn sm find-next" title="Newer match (Shift+Enter)" aria-label="Newer match"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
+        <button type="button" class="icon-btn sm find-prev" title="Older match (Enter)" aria-label="Older match"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg></button>
+        <button type="button" class="icon-btn sm find-next" title="Newer match (Shift+Enter)" aria-label="Newer match"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
       </div>
       <button type="button" class="btn sm ghost copy-out single-only" title="Copy this terminal's output">Copy</button>
       <a class="btn sm ghost log-link" title="Download this run's log" hidden>Log</a>
       <button type="button" class="btn sm danger" data-action="cancel" title="Stop the tool and its children (c)">Stop</button>
-      <button type="button" class="icon-btn sm close-btn" data-action="close" title="Close this terminal (x)" aria-label="Close terminal"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      <button type="button" class="icon-btn sm close-btn" data-action="close" title="Close this terminal (x)" aria-label="Close terminal"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
     <div class="out" tabindex="0"></div>
     <button type="button" class="jump" hidden>New output ↓</button>

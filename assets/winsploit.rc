@@ -1,0 +1,3 @@
+// The Iso cube icon for winsploit.exe; regenerate winsploit.ico with
+// node site/scripts/app-icon.mjs
+1 ICON "winsploit.ico"
