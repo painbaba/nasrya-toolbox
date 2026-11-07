@@ -158,3 +158,11 @@ tools:
     scoop: radare2
     run_cmd: radare2
     args_hint: "-v"
+
+  - name: upx
+    category: reversing
+    description: Executable packer / unpacker
+    exe: upx
+    scoop: upx
+    run_cmd: upx
+    args_hint: "-V"
