@@ -39,6 +39,8 @@ pub enum Mode {
     HashInput,
     /// typing a line for the running process's stdin
     StdinInput,
+    /// typing a filter for the tool list (applied live)
+    Filter,
 }
 
 #[derive(PartialEq, Eq)]
@@ -54,6 +56,8 @@ pub struct App {
     /// For tools in Conflict: the path of the program that's actually found.
     conflicts: Vec<Option<PathBuf>>,
     pub selected: usize,
+    /// Tool-list filter (empty = show everything).
+    pub filter: String,
     pub output: Vec<String>,
     /// Output rows scrolled up from the bottom (0 = follow new output).
     pub scroll: usize,
@@ -101,6 +105,7 @@ impl App {
             status: vec![ToolStatus::Unknown; n],
             conflicts: vec![None; n],
             selected: 0,
+            filter: String::new(),
             output,
             scroll: 0,
             view: std::cell::Cell::new((10, 0)),
@@ -249,7 +254,9 @@ impl App {
     fn on_key(&mut self, key: KeyEvent) {
         match self.mode {
             Mode::Browsing => self.on_key_browsing(key.code),
-            Mode::Input | Mode::HashInput | Mode::StdinInput => self.on_key_input(key),
+            Mode::Input | Mode::HashInput | Mode::StdinInput | Mode::Filter => {
+                self.on_key_input(key)
+            }
         }
     }
 
@@ -267,15 +274,11 @@ impl App {
     fn on_key_browsing(&mut self, code: KeyCode) {
         match code {
             KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.selected > 0 {
-                    self.selected -= 1;
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.selected + 1 < self.tools.len() {
-                    self.selected += 1;
-                }
+            KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+            KeyCode::Char('/') => {
+                self.editor.set(&self.filter.clone());
+                self.mode = Mode::Filter;
             }
             KeyCode::Char('r') => self.detect_all(true),
             KeyCode::PageUp => {
@@ -288,12 +291,17 @@ impl App {
             }
             KeyCode::End => self.scroll = 0,
             KeyCode::Home => self.scroll = self.view.get().1,
-            KeyCode::Char('i') => self.install_selected(),
+            KeyCode::Char('i') if self.visible().contains(&self.selected) => {
+                self.install_selected()
+            }
             KeyCode::Char('c') => self.cancel(),
             KeyCode::Char('h') => {
                 self.editor.set("");
                 self.history.reset();
                 self.mode = Mode::HashInput;
+            }
+            KeyCode::Enter | KeyCode::Char('i') if !self.visible().contains(&self.selected) => {
+                self.status_line = "no tool matches the filter (press / to change it)".into();
             }
             KeyCode::Enter => {
                 if self.tools[self.selected].launch == Launch::Dataset {
@@ -325,11 +333,24 @@ impl App {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let e = &mut self.editor;
         match key.code {
+            KeyCode::Esc if self.mode == Mode::Filter => {
+                // Esc in the filter prompt clears the filter
+                self.editor.set("");
+                self.set_filter(String::new());
+                self.mode = Mode::Browsing;
+            }
             KeyCode::Esc => {
                 self.mode = Mode::Browsing;
                 self.editor.set("");
                 self.history.reset();
             }
+            KeyCode::Enter if self.mode == Mode::Filter => {
+                // keep the filter, back to the list
+                self.editor.set("");
+                self.mode = Mode::Browsing;
+            }
+            KeyCode::Up if self.mode == Mode::Filter => self.move_selection(-1),
+            KeyCode::Down if self.mode == Mode::Filter => self.move_selection(1),
             KeyCode::Enter => {
                 let text = self.editor.take();
                 let hkey = self.history_key();
@@ -379,6 +400,51 @@ impl App {
             KeyCode::Char(c) => e.insert(c),
             _ => {}
         }
+        if self.mode == Mode::Filter {
+            let f = self.editor.text();
+            if f != self.filter {
+                self.set_filter(f);
+            }
+        }
+    }
+
+    /// Indices of the tools that match the current filter, in catalog order.
+    pub fn visible(&self) -> Vec<usize> {
+        let needle = self.filter.trim().to_lowercase();
+        self.tools
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| {
+                needle.is_empty()
+                    || needle.split_whitespace().all(|w| {
+                        t.name.to_lowercase().contains(w)
+                            || t.category.to_lowercase().contains(w)
+                            || t.description.to_lowercase().contains(w)
+                    })
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    fn set_filter(&mut self, f: String) {
+        self.filter = f;
+        let vis = self.visible();
+        if !vis.is_empty() && !vis.contains(&self.selected) {
+            self.selected = vis[0];
+        }
+    }
+
+    /// Move the selection by `delta` among the visible tools.
+    fn move_selection(&mut self, delta: i32) {
+        let vis = self.visible();
+        let Some(pos) = vis.iter().position(|&i| i == self.selected) else {
+            if let Some(&first) = vis.first() {
+                self.selected = first;
+            }
+            return;
+        };
+        let new = (pos as i32 + delta).clamp(0, vis.len() as i32 - 1) as usize;
+        self.selected = vis[new];
     }
 
     /// Send one line to the running tool's stdin (echoed in the pane).

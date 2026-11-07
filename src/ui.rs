@@ -85,11 +85,11 @@ fn render_tool_list(f: &mut Frame, app: &App, area: Rect) {
         .map(|t| t.name.chars().count())
         .max()
         .unwrap_or(0);
-    let items: Vec<ListItem> = app
-        .tools
+    let visible = app.visible();
+    let items: Vec<ListItem> = visible
         .iter()
-        .enumerate()
-        .map(|(i, t)| {
+        .map(|&i| {
+            let t = &app.tools[i];
             let (icon, color) = match app.status[i] {
                 ToolStatus::Installed => ("●", GREEN),
                 ToolStatus::Missing => ("○", RED),
@@ -106,17 +106,33 @@ fn render_tool_list(f: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
-    let pos = format!(" {}/{} ", app.selected + 1, app.tools.len().max(1));
+    let sel_pos = visible.iter().position(|&i| i == app.selected);
+    let pos = match sel_pos {
+        Some(p) => format!(" {}/{} ", p + 1, visible.len()),
+        None => format!(" 0/{} ", visible.len()),
+    };
+    let mut title = vec![Span::styled(
+        " tools ",
+        Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+    )];
+    if !app.filter.trim().is_empty() {
+        title.push(Span::styled(
+            format!(
+                "/ {} ({} of {}) ",
+                app.filter.trim(),
+                visible.len(),
+                app.tools.len()
+            ),
+            Style::default().fg(YELLOW),
+        ));
+    }
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(CYAN_DIM))
-                .title(Span::styled(
-                    " tools ",
-                    Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-                ))
+                .title(Line::from(title))
                 .title_bottom(
                     Line::from(Span::styled(pos, Style::default().fg(DIM)))
                         .alignment(Alignment::Right),
@@ -131,7 +147,7 @@ fn render_tool_list(f: &mut Frame, app: &App, area: Rect) {
         .highlight_symbol("▸ ");
 
     let mut state = ListState::default();
-    state.select(Some(app.selected));
+    state.select(sel_pos);
     f.render_stateful_widget(list, area, &mut state);
 }
 
@@ -268,10 +284,14 @@ fn line_style(l: &str) -> Style {
 
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     let content = match app.mode {
-        Mode::Input | Mode::HashInput | Mode::StdinInput => {
+        Mode::Input | Mode::HashInput | Mode::StdinInput | Mode::Filter => {
             let (label, help) = match app.mode {
                 Mode::HashInput => (" hash ▸ ", "  Enter identify · Esc cancel"),
                 Mode::StdinInput => (" stdin ▸ ", "  Enter send · Ctrl+D end input · Esc close"),
+                Mode::Filter => (
+                    " filter ▸ ",
+                    "  name / category / text · Enter keep · Esc clear",
+                ),
                 _ => (" args ▸ ", "  Enter run · ↑↓ history · Esc cancel"),
             };
             let label_w = label.chars().count() as u16 + 1; // + the space after it
@@ -314,6 +334,8 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
             Span::styled("  ", Style::default()),
             Span::styled("↑/↓", Style::default().fg(CYAN)),
             Span::styled(" move · ", Style::default().fg(DIM)),
+            Span::styled("/", Style::default().fg(CYAN)),
+            Span::styled(" filter · ", Style::default().fg(DIM)),
             Span::styled("Enter", Style::default().fg(CYAN)),
             Span::styled(" run · ", Style::default().fg(DIM)),
             Span::styled("i", Style::default().fg(CYAN)),
@@ -435,6 +457,29 @@ mod tests {
                 (1, "ef".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn filter_narrows_the_list() {
+        let mut a = app();
+        a.filter = "reversing".into();
+        let vis = a.visible();
+        assert!(vis.len() > 3);
+        assert!(vis.iter().all(|&i| a.tools[i].category == "reversing"));
+        // words AND together, across name/category/description
+        a.filter = "web brute".into();
+        let names: Vec<&str> = a
+            .visible()
+            .iter()
+            .map(|&i| a.tools[i].name.as_str())
+            .collect();
+        assert!(names.contains(&"dirsearch"), "{names:?}");
+        assert!(!names.contains(&"nmap"));
+        // renders with a filter, including one that matches nothing
+        draw(&a, 100, 20);
+        a.filter = "zzz-no-match".into();
+        assert!(a.visible().is_empty());
+        draw(&a, 100, 20);
     }
 
     #[test]
