@@ -367,7 +367,7 @@ every field.
 
 ```yaml
   - name: gobuster
-    category: recon
+    categories: [recon, web]   # every category it fits, main one first
     description: Directory / DNS / vhost brute-forcing
     exe: gobuster          # used to detect installation (PATH probe)
     scoop: gobuster        # Scoop package to install
@@ -385,7 +385,7 @@ can add it on first install.
 
 ```yaml
   - name: arjun
-    category: web
+    categories: [web, recon]
     description: HTTP parameter discovery
     exe: arjun
     install: pipx
