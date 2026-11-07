@@ -11,6 +11,7 @@ mod args;
 mod banner;
 mod detect;
 mod envpath;
+mod install;
 mod registry;
 mod runner;
 mod scoop;

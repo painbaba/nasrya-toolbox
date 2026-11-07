@@ -120,7 +120,7 @@ pass `--catalog .\tools.yaml` to use it on purpose. The active path is shown in 
 |---|---|
 | `↑ / ↓` | move selection |
 | `Enter` | run the selected tool (edit the prefilled args, then Enter) |
-| `i` | install the selected tool via Scoop |
+| `i` | install the selected tool (Scoop or pipx) |
 | `r` | re-detect what's installed |
 | `c` | cancel the running process |
 | `q` | quit |
@@ -148,13 +148,46 @@ Edit [`tools.yaml`](tools.yaml) — no code changes:
 A bucket that Scoop doesn't know by name also needs its URL in the top-level `buckets:` map,
 so nasrya can add it on first install.
 
+**Python tools** install with pipx (each in its own venv). If pipx is missing, nasrya installs
+Python and pipx through Scoop first:
+
+```yaml
+  - name: arjun
+    category: web
+    description: HTTP parameter discovery
+    exe: arjun
+    install: pipx
+    pipx: arjun            # or git+https://github.com/owner/repo for unreleased tools
+    run_cmd: arjun
+    args_hint: "-u https://example.com/endpoint"
+```
+
+**Desktop and web apps** don't stream output. `launch: gui` starts the app in its own window.
+`launch: web` starts `run_cmd` (a local server, output streamed and cancellable with `c`) if
+there is one, then opens `url` in your browser:
+
+```yaml
+    launch: gui                        # Ghidra, x64dbg, ...
+    # or
+    launch: web
+    url: http://127.0.0.1:5001         # SpiderFoot, ...
+```
+
+`note:` adds a caveat that's shown every time the tool is run, e.g. a Windows limitation.
+Bad entries (missing `scoop:`/`pipx:`, a web tool without a `url:`, …) are reported together
+when the catalog loads.
+
 ## Architecture
 
 ```
 main.rs        CLI entry (TUI / list / help)
-registry.rs    loads the YAML tool catalog            ── security core (careful path)
-detect.rs      PATH-probe detection (ground truth)     ──
-runner.rs      spawn + stream + kill process tree       ──
+registry.rs    loads + validates the YAML tool catalog ── security core (careful path)
+detect.rs      PATH x PATHEXT detection (ground truth) ──
+install.rs     install planning (scoop / pipx)         ──
+scoop.rs       scoop buckets + package installs        ──
+envpath.rs     picks up PATH changes after installs    ──
+args.rs        quote-aware argument splitting          ──
+runner.rs      spawn + stream / detach + kill tree      ──
 app.rs         state machine, launch/install control    ──
 ui.rs          dashboard rendering                       ── presentation layer
 banner.rs      ASCII-art splash + wordmark               ──

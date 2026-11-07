@@ -92,6 +92,37 @@ fn resolve_program(program: &str) -> PathBuf {
     detect::resolve(program).unwrap_or_else(|| PathBuf::from(program))
 }
 
+/// Start a desktop app and let it go: no pipes, nothing to wait on.
+/// CREATE_NO_WINDOW keeps `.bat` launchers (Ghidra, jadx-gui, ...) from
+/// leaving an empty console window behind; GUI windows still appear.
+pub fn spawn_detached(mut cmd: Command) -> std::io::Result<u32> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()?;
+    Ok(child.id())
+}
+
+/// Open an http(s) URL in the default browser. Goes through
+/// `url.dll,FileProtocolHandler` rather than `cmd /C start`, so characters
+/// like `&` in the URL are never interpreted by a shell.
+pub fn open_url(url: &str) -> std::io::Result<()> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "only http(s) URLs are opened",
+        ));
+    }
+    Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", url])
+        .spawn()
+        .map(|_| ())
+}
+
 /// Kill a process and its whole tree (taskkill /T). Best-effort.
 pub fn kill_tree(pid: u32) {
     let _ = Command::new("taskkill")

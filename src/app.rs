@@ -13,7 +13,8 @@ use crate::args;
 use crate::banner;
 use crate::detect;
 use crate::envpath;
-use crate::registry::{Catalog, Tool};
+use crate::install;
+use crate::registry::{Catalog, Install, Launch, Tool};
 use crate::runner::{self, AppEvent};
 use crate::scoop;
 use crate::ui;
@@ -66,7 +67,7 @@ impl App {
         let n = tools.len();
         let mut output = vec![
             ":: nasrya ready. tools above; output appears here.".into(),
-            ":: Enter runs the highlighted tool · i installs it via scoop.".into(),
+            ":: Enter runs the highlighted tool · i installs it (scoop or pipx).".into(),
             format!(":: catalog: {}", catalog_path.display()),
         ];
         if let Some(ignored) = ignored {
@@ -276,16 +277,86 @@ impl App {
                 return;
             }
         };
-        self.push(format!("$ {} {}", cmd, args::join(&args)));
+        let tool = self.tools[self.selected].clone();
+        if let Some(note) = &tool.note {
+            self.push(format!(":: note: {note}"));
+        }
 
-        match runner::spawn_streaming(runner::tool_command(&cmd, &args), self.tx.clone()) {
+        match tool.launch {
+            Launch::Stream => {
+                self.start_streaming(&name, &cmd, &args);
+            }
+            Launch::Gui => {
+                self.push(format!("$ {} {}", cmd, args::join(&args)));
+                match runner::spawn_detached(runner::tool_command(&cmd, &args)) {
+                    Ok(pid) => {
+                        self.push(format!(
+                            "── launched {name} (pid {pid}); it runs in its own window ──"
+                        ));
+                        self.status_line = format!("launched {name}");
+                    }
+                    Err(e) => self.push(format!("failed to launch: {e}")),
+                }
+            }
+            Launch::Web => {
+                let url = tool.url.clone().unwrap_or_default();
+                if cmd.trim().is_empty() {
+                    self.open_url(&url, 0);
+                } else {
+                    // start the server (streamed, cancellable), then give it
+                    // a moment before opening the browser
+                    if self.start_streaming(&name, &cmd, &args) {
+                        self.open_url(&url, 2);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Run `cmd args` with output streamed into the pane. Returns whether it
+    /// started.
+    fn start_streaming(&mut self, name: &str, cmd: &str, args: &[String]) -> bool {
+        self.push(format!("$ {} {}", cmd, args::join(args)));
+        match runner::spawn_streaming(runner::tool_command(cmd, args), self.tx.clone()) {
             Ok(pid) => {
                 self.running = true;
                 self.running_pid = Some(pid);
                 self.status_line = format!("running {name} (pid {pid})");
+                true
             }
-            Err(e) => self.push(format!("failed to launch: {e}")),
+            Err(e) => {
+                self.push(format!("failed to launch: {e}"));
+                false
+            }
         }
+    }
+
+    /// Open `url` in the default browser after `delay_s` seconds.
+    fn open_url(&mut self, url: &str, delay_s: u64) {
+        self.push(format!(":: opening {url} in your browser"));
+        let url = url.to_string();
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(delay_s));
+            if let Err(e) = runner::open_url(&url) {
+                let _ = tx.send(AppEvent::Output(format!("[err] couldn't open {url}: {e}")));
+            }
+        });
+    }
+
+    /// Is there a real `python`? The Microsoft Store puts a stub
+    /// `python.exe` on PATH that only prints "Python was not found" (exit
+    /// 9009), so resolving the name isn't enough; ask it for its version.
+    fn python_works() -> bool {
+        detect::resolve("python").is_some()
+            && std::process::Command::new("python")
+                .arg("--version")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
     }
 
     fn install_selected(&mut self) {
@@ -293,18 +364,18 @@ impl App {
             self.status_line = "wait for the current process to finish".into();
             return;
         }
-        let pkg = self.tools[self.selected].scoop.clone();
-        let name = self.tools[self.selected].name.clone();
-        let bucket = self.tools[self.selected].bucket.clone();
+        let tool = self.tools[self.selected].clone();
+        let name = tool.name.clone();
 
-        if detect::resolve("scoop").is_none() {
-            self.push("[err] scoop isn't installed (or not on PATH). Install it first:");
-            self.push("[err]   irm get.scoop.sh | iex      (in PowerShell; see https://scoop.sh)");
-            return;
-        }
-
-        let added = bucket.as_deref().is_some_and(scoop::bucket_added);
-        let steps = match scoop::plan_install(&pkg, bucket.as_deref(), added, &self.buckets) {
+        let pipx = detect::resolve("pipx").is_some();
+        let pre = install::Prereqs {
+            scoop: detect::resolve("scoop").is_some(),
+            pipx,
+            // only worth the subprocess when pipx has to be bootstrapped
+            python: tool.install == Install::Pipx && !pipx && Self::python_works(),
+            bucket_added: tool.bucket.as_deref().is_some_and(scoop::bucket_added),
+        };
+        let steps = match install::plan(&tool, pre, &self.buckets) {
             Ok(s) => s,
             Err(e) => {
                 self.push(format!("[err] can't install {name}: {e}"));
@@ -314,10 +385,10 @@ impl App {
         let line = steps.join(" && ");
         self.push(format!("$ {line}"));
 
-        // scoop is a .cmd/.ps1 shim, so go through cmd. Every token in `line`
-        // was checked by plan_install to be free of cmd metacharacters, and
-        // `&&` stops the install if adding the bucket failed. /D skips any
-        // AutoRun commands from the registry.
+        // scoop and pipx are .cmd/.bat shims, so go through cmd. Every token
+        // in `line` was checked by install::plan to be free of cmd
+        // metacharacters, and `&&` stops at the first failing step. /D skips
+        // any AutoRun commands from the registry.
         let mut cmd = std::process::Command::new("cmd");
         {
             use std::os::windows::process::CommandExt;
@@ -330,7 +401,7 @@ impl App {
                 self.installing = true;
                 self.status_line = format!("installing {name}…");
             }
-            Err(e) => self.push(format!("failed to start scoop: {e}")),
+            Err(e) => self.push(format!("failed to start the installer: {e}")),
         }
     }
 

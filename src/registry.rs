@@ -8,6 +8,31 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+/// How a tool gets installed.
+#[derive(Debug, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Install {
+    /// `scoop install [bucket/]<scoop>` (the default)
+    #[default]
+    Scoop,
+    /// `pipx install <pipx>`: Python tools in their own venv
+    Pipx,
+}
+
+/// How a tool is launched.
+#[derive(Debug, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Launch {
+    /// CLI: output streams into the output pane (the default)
+    #[default]
+    Stream,
+    /// Desktop app: started detached; nothing to stream or wait for
+    Gui,
+    /// Local web app: optionally start `run_cmd` (a server, streamed), then
+    /// open `url` in the default browser
+    Web,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Tool {
     pub name: String,
@@ -17,15 +42,63 @@ pub struct Tool {
     pub description: String,
     /// Executable name used to detect installation (PATH probe).
     pub exe: String,
-    /// Scoop package name used to install.
-    pub scoop: String,
-    /// Command actually launched.
-    pub run_cmd: String,
+    /// Install backend (default: scoop).
     #[serde(default)]
-    pub args_hint: Option<String>,
+    pub install: Install,
+    /// Scoop package name (install: scoop).
+    #[serde(default)]
+    pub scoop: Option<String>,
     /// Optional scoop bucket the package lives in (main-bucket tools omit this).
     #[serde(default)]
     pub bucket: Option<String>,
+    /// pipx package spec, e.g. `arjun` or `git+https://github.com/o/r`
+    /// (install: pipx).
+    #[serde(default)]
+    pub pipx: Option<String>,
+    /// Command actually launched. May be empty for `launch: web` tools that
+    /// are only a URL.
+    #[serde(default)]
+    pub run_cmd: String,
+    #[serde(default)]
+    pub args_hint: Option<String>,
+    /// Launch mode (default: stream).
+    #[serde(default)]
+    pub launch: Launch,
+    /// URL opened by `launch: web`.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Caveat shown when the tool is run (e.g. Windows limitations).
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+impl Tool {
+    /// Problems that make this entry unusable, if any.
+    fn problems(&self) -> Vec<String> {
+        let mut p = Vec::new();
+        let missing = |f: &Option<String>| f.as_deref().is_none_or(|s| s.trim().is_empty());
+        match self.install {
+            Install::Scoop if missing(&self.scoop) => {
+                p.push("install: scoop needs a `scoop:` package".into())
+            }
+            Install::Pipx if missing(&self.pipx) => {
+                p.push("install: pipx needs a `pipx:` package spec".into())
+            }
+            _ => {}
+        }
+        match self.launch {
+            Launch::Web => match self.url.as_deref() {
+                None => p.push("launch: web needs a `url:`".into()),
+                Some(u) if !(u.starts_with("http://") || u.starts_with("https://")) => {
+                    p.push(format!("url must be http(s):// (got {u:?})"))
+                }
+                _ => {}
+            },
+            _ if self.run_cmd.trim().is_empty() => p.push("`run_cmd:` is required".into()),
+            _ => {}
+        }
+        p
+    }
 }
 
 /// The whole catalog file.
@@ -112,5 +185,80 @@ pub fn load(path: impl AsRef<Path>) -> Result<Catalog> {
     let path = path.as_ref();
     let text = fs::read_to_string(path)
         .with_context(|| format!("reading tool registry {}", path.display()))?;
-    serde_yaml::from_str(&text).context("parsing tools.yaml")
+    parse(&text).with_context(|| format!("in {}", path.display()))
+}
+
+/// Parse and validate catalog text.
+pub fn parse(text: &str) -> Result<Catalog> {
+    let cat: Catalog = serde_yaml::from_str(text).context("parsing tools.yaml")?;
+    let errors: Vec<String> = cat
+        .tools
+        .iter()
+        .flat_map(|t| {
+            t.problems()
+                .into_iter()
+                .map(move |e| format!("  {}: {e}", t.name))
+        })
+        .collect();
+    if !errors.is_empty() {
+        anyhow::bail!("invalid tool entries:\n{}", errors.join("\n"));
+    }
+    Ok(cat)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_are_scoop_and_stream() {
+        let c = parse("tools:\n  - {name: nmap, exe: nmap, scoop: nmap, run_cmd: nmap}\n").unwrap();
+        assert_eq!(c.tools[0].install, Install::Scoop);
+        assert_eq!(c.tools[0].launch, Launch::Stream);
+    }
+
+    #[test]
+    fn pipx_and_web_entries() {
+        let c = parse(
+            "tools:\n\
+             \x20 - {name: arjun, exe: arjun, install: pipx, pipx: arjun, run_cmd: arjun}\n\
+             \x20 - {name: chef, exe: x, scoop: x, launch: web, url: 'http://127.0.0.1:1'}\n",
+        )
+        .unwrap();
+        assert_eq!(c.tools[0].install, Install::Pipx);
+        assert_eq!(c.tools[1].launch, Launch::Web);
+    }
+
+    #[test]
+    fn invalid_entries_are_reported_together() {
+        let e = parse(
+            "tools:\n\
+             \x20 - {name: a, exe: a, run_cmd: a}\n\
+             \x20 - {name: b, exe: b, install: pipx, run_cmd: b}\n\
+             \x20 - {name: c, exe: c, scoop: c, launch: web, url: 'file:///x'}\n\
+             \x20 - {name: d, exe: d, scoop: d}\n",
+        )
+        .unwrap_err();
+        let msg = format!("{e:#}");
+        for needle in [
+            "a: install: scoop",
+            "b: install: pipx",
+            "c: url must",
+            "d: `run_cmd:`",
+        ] {
+            assert!(msg.contains(needle), "{needle} missing from:\n{msg}");
+        }
+    }
+
+    #[test]
+    fn unknown_install_backend_is_an_error() {
+        assert!(parse("tools:\n  - {name: a, exe: a, install: npm, run_cmd: a}\n").is_err());
+    }
+
+    #[test]
+    fn shipped_catalog_is_valid() {
+        let text = include_str!("../tools.yaml");
+        let c = parse(text).unwrap();
+        assert!(!c.tools.is_empty());
+    }
 }
