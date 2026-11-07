@@ -3,6 +3,7 @@
 //! Usage:
 //!   nasrya [--catalog <path>]         launch the interactive dashboard (TUI)
 //!   nasrya [--catalog <path>] list    print the tool catalog and exit
+//!   nasrya hashid <hash>...           identify hash types
 //!   nasrya --help                     show this help
 //!   nasrya --version                  show version
 
@@ -11,6 +12,7 @@ mod args;
 mod banner;
 mod detect;
 mod envpath;
+mod hashid;
 mod install;
 mod registry;
 mod runner;
@@ -57,6 +59,24 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some("list") => list(catalog.as_deref()),
+        Some("hashid") => {
+            if args.len() < 2 {
+                eprintln!("usage: nasrya hashid <hash> [<hash> ...]");
+                std::process::exit(2);
+            }
+            for (i, h) in args[1..].iter().enumerate() {
+                if args.len() > 2 {
+                    if i > 0 {
+                        println!();
+                    }
+                    println!("{h}");
+                }
+                for line in hashid::report(h) {
+                    println!("{line}");
+                }
+            }
+            Ok(())
+        }
         Some(other) => {
             eprintln!("nasrya: unknown command '{other}'. Try `nasrya --help`.");
             std::process::exit(2);
@@ -164,6 +184,7 @@ nasrya {VERSION} — native-Windows security toolbox & command runner\n\n\
 USAGE:\n\
     nasrya [--catalog <path>]         launch the interactive dashboard\n\
     nasrya [--catalog <path>] list    list the tool catalog with install status\n\
+    nasrya hashid <hash>...           identify hash types (+ hashcat / john modes)\n\
     nasrya --help                     show this help\n\
     nasrya --version                  show version\n\n\
 CATALOG (tools.yaml) is looked up in this order:\n\

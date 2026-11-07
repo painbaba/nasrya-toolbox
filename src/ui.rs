@@ -218,15 +218,20 @@ fn style_output_line(l: &str) -> Span<'static> {
 
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     let content = match app.mode {
-        Mode::Input => {
+        Mode::Input | Mode::HashInput => {
             let cursor = if (app.tick / 4).is_multiple_of(2) {
                 "█"
             } else {
                 " "
             };
+            let (label, help) = if app.mode == Mode::HashInput {
+                (" hash ▸ ", "   (Enter to identify · Esc to cancel)")
+            } else {
+                (" args ▸ ", "   (Enter to run · Esc to cancel)")
+            };
             Line::from(vec![
                 Span::styled(
-                    " args ▸ ",
+                    label,
                     Style::default()
                         .fg(INK)
                         .bg(YELLOW)
@@ -234,10 +239,7 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
                 ),
                 Span::styled(format!(" {}", app.input), Style::default().fg(FG)),
                 Span::styled(cursor.to_string(), Style::default().fg(YELLOW)),
-                Span::styled(
-                    "   (Enter to run · Esc to cancel)",
-                    Style::default().fg(DIM),
-                ),
+                Span::styled(help, Style::default().fg(DIM)),
             ])
         }
         Mode::Browsing => Line::from(vec![
@@ -259,6 +261,8 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(" re-detect · ", Style::default().fg(DIM)),
             Span::styled("c", Style::default().fg(CYAN)),
             Span::styled(" cancel · ", Style::default().fg(DIM)),
+            Span::styled("h", Style::default().fg(CYAN)),
+            Span::styled(" hash id · ", Style::default().fg(DIM)),
             Span::styled("q", Style::default().fg(CYAN)),
             Span::styled(" quit", Style::default().fg(DIM)),
         ]),

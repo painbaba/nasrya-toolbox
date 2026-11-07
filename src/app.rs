@@ -13,6 +13,7 @@ use crate::args;
 use crate::banner;
 use crate::detect;
 use crate::envpath;
+use crate::hashid;
 use crate::install;
 use crate::registry::{Catalog, Install, Launch, Tool};
 use crate::runner::{self, AppEvent};
@@ -29,7 +30,10 @@ pub enum ToolStatus {
 #[derive(PartialEq, Eq)]
 pub enum Mode {
     Browsing,
+    /// editing the selected tool's arguments
     Input,
+    /// typing a hash for the built-in identifier
+    HashInput,
 }
 
 #[derive(PartialEq, Eq)]
@@ -201,7 +205,7 @@ impl App {
     fn on_key(&mut self, code: KeyCode) {
         match self.mode {
             Mode::Browsing => self.on_key_browsing(code),
-            Mode::Input => self.on_key_input(code),
+            Mode::Input | Mode::HashInput => self.on_key_input(code),
         }
     }
 
@@ -221,6 +225,10 @@ impl App {
             KeyCode::Char('r') => self.detect_all(true),
             KeyCode::Char('i') => self.install_selected(),
             KeyCode::Char('c') => self.cancel(),
+            KeyCode::Char('h') => {
+                self.input.clear();
+                self.mode = Mode::HashInput;
+            }
             KeyCode::Enter => {
                 if self.running {
                     self.status_line = "a process is already running (press c to cancel)".into();
@@ -241,16 +249,30 @@ impl App {
                 self.input.clear();
             }
             KeyCode::Enter => {
-                let args = self.input.clone();
-                self.mode = Mode::Browsing;
-                self.input.clear();
-                self.launch(&args);
+                let text = std::mem::take(&mut self.input);
+                let mode = std::mem::replace(&mut self.mode, Mode::Browsing);
+                if mode == Mode::HashInput {
+                    self.identify_hash(&text);
+                } else {
+                    self.launch(&text);
+                }
             }
             KeyCode::Backspace => {
                 self.input.pop();
             }
             KeyCode::Char(c) => self.input.push(c),
             _ => {}
+        }
+    }
+
+    /// Built-in hash identifier (`h`): no install, works offline.
+    fn identify_hash(&mut self, hash: &str) {
+        if hash.trim().is_empty() {
+            return;
+        }
+        self.push(format!("$ hashid {}", hash.trim()));
+        for line in hashid::report(hash) {
+            self.push(line);
         }
     }
 

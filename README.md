@@ -101,6 +101,7 @@ scoop bucket add extras
 ```
 nasrya              launch the interactive dashboard
 nasrya list         list the tool catalog with install status
+nasrya hashid <h>   identify a hash (built in: hashcat -m / john --format hints)
 nasrya --help       show help
 nasrya --version    show version
 
@@ -123,6 +124,7 @@ pass `--catalog .\tools.yaml` to use it on purpose. The active path is shown in 
 | `i` | install the selected tool (Scoop or pipx) |
 | `r` | re-detect what's installed |
 | `c` | cancel the running process |
+| `h` | identify a hash (built in, works offline) |
 | `q` | quit |
 
 **Arguments** are split on spaces. Use `"double"` or `'single'` quotes to keep spaces in
