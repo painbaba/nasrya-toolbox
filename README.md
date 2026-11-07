@@ -89,9 +89,18 @@ git clone https://github.com/tahabenissa/nasrya-toolbox
 cd nasrya-toolbox
 cargo build --release
 
-# 3. Launch the dashboard (a dev build finds the checkout's tools.yaml from any directory)
-.\target\release\winsploit
+# 3. Make `winsploit` a command (adds target\release to your user PATH, no admin)
+.\target\release\winsploit setup --path
+
+# 4. Open a new terminal, go to where you work, and launch it
+cd C:\ctf\some-box
+winsploit
 ```
+
+Tools run in the folder you started Winsploit from. `winsploit -C <folder>` starts somewhere else,
+and `d` in the dashboard changes it like `cd` (see [Working folder](#working-folder)). After a
+`git pull`, `cargo build --release` updates the `winsploit` command too (close Winsploit first:
+a running copy locks the file).
 
 Pick a tool with `↑/↓` (or `/` to filter), press `i` to install it and `Enter` to run it. Press
 `?` any time to see every key.
@@ -230,6 +239,7 @@ winsploit --version, -V   show version
 | `f` · `n` · `N` | Find in output · older match · newer match |
 | `c` | Cancel the running process (kills the whole tree) |
 | `h` | Identify a hash (built in, offline) |
+| `d` | Working folder: where tools run, like `cd` · `Tab` completes · `..` `~` `-` work |
 | `C` | Challenges: create, switch, set the target / flag format, add files, open notes |
 | `F` | Flags caught in tool output (`Enter` copies one) |
 | `S` | Run the selected tool in Windows Sandbox (see below) · `Tab` in the prompt = network on/off |
@@ -238,6 +248,26 @@ winsploit --version, -V   show version
 | `L` | LAN guests: join key and who's in · `v` / `f` watch / full control · `x` remove · `n` new key |
 | `?` | Show all keys |
 | `q` | Quit |
+
+### Working folder
+
+Tools run in the **working folder**, like a shell's current folder: `nmap -oN scan.txt` writes
+`scan.txt` there and `strings chall.bin` finds `chall.bin` there. It starts as the folder you
+launched Winsploit from (or `winsploit -C <folder>`), and the selected tool's panel shows it.
+
+Press `d` to change it, the way you'd `cd`:
+
+| Type | Goes to |
+|---|---|
+| `htb\lame` · `..` · `C:\ctf\box` · `D:` | a relative or absolute folder, as in a shell |
+| `~` · `~\ctf` | your profile folder (`%USERPROFILE%`) |
+| `%TEMP%` | environment variables |
+| `-` | back to the previous folder |
+| a pasted file path | the folder that file is in |
+
+`Tab` completes folder names (repeat to cycle, `Shift+Tab` back) and `↑ ↓` recall folders you used.
+Switching challenge with `C` moves you into its folder. The web view shows the folder but can't
+change it: only the terminal picks folders on your machine.
 
 ### Appearance
 

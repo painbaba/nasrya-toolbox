@@ -176,6 +176,8 @@ pub enum Mode {
     SlotPick,
     /// typing the sample (file or folder) to open in Windows Sandbox
     SandboxInput,
+    /// typing the working folder, like `cd` (Tab completes)
+    FolderInput,
     /// creating or editing a challenge, one field at a time
     Challenge(ChallengeField),
     /// a value a recipe needs that isn't known yet (target, file, wordlist)
@@ -474,6 +476,13 @@ pub struct App {
     pub sandbox_net: bool,
     /// Last sample given to the sandbox prompt, offered again next time.
     sandbox_last: String,
+    /// The working folder: tools run here (`d` changes it, like `cd`).
+    pub cwd: PathBuf,
+    /// The folder before the last change, for `d` then `-`.
+    prev_cwd: Option<PathBuf>,
+    /// Tab in the folder prompt: what was typed and the matches it cycles
+    /// through (index of the one shown).
+    pub folder_tab: Option<(String, Vec<String>, usize)>,
     /// The agent overlay (the AI's analysis), when open.
     pub agent: Option<AgentView>,
     /// The agent-provider picker (`A`), when open.
@@ -579,6 +588,9 @@ impl App {
             mono: crate::theme::no_color(),
             sandbox_net: false,
             sandbox_last: String::new(),
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            prev_cwd: None,
+            folder_tab: None,
             agent: None,
             provider_pick: None,
             agent_busy: false,
@@ -886,6 +898,11 @@ impl App {
                 ));
                 self.status_line = format!("challenge: {}{target}", w.title());
                 self.toast(ToastKind::Info, format!("challenge: {}", w.title()));
+                // work where the challenge's files are
+                if w.dir.is_dir() {
+                    let dir = w.dir.clone();
+                    self.set_cwd(dir);
+                }
             }
             None => {
                 self.console
@@ -1398,8 +1415,10 @@ impl App {
             s.push(format!(":: note: {note}"));
         }
         let shown = format!("{} {}", t.run_cmd, args::join(&args));
+        s.push(format!(":: in {}", crate::folder::short(&self.cwd)));
         s.push(format!("$ {shown}"));
-        let cmd = runner::tool_command(&t.run_cmd, &args);
+        let mut cmd = runner::tool_command(&t.run_cmd, &args);
+        cmd.current_dir(&self.cwd);
         match runner::spawn_streaming(cmd, self.tx.clone(), true, s.id) {
             Ok(sp) => {
                 s.open_log(&self.logs_dir(), &t.name, &shown, &self.source_label(src));
@@ -2165,6 +2184,8 @@ impl App {
             "\u{0}challenge".to_string()
         } else if self.mode == Mode::SandboxInput {
             "\u{0}sandbox".to_string()
+        } else if self.mode == Mode::FolderInput {
+            "\u{0}folder".to_string()
         } else {
             self.tools[self.selected].name.clone()
         }
@@ -2206,6 +2227,7 @@ impl App {
             KeyCode::Char('c') => self.apply(Action::Cancel(self.focus), Source::Terminal),
             KeyCode::Char('s') => self.open_stdin(),
             KeyCode::Char('S') => self.open_sandbox(),
+            KeyCode::Char('d') => self.open_folder_prompt(),
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char('t') => {
                 self.appearance = Some(Appearance {
@@ -2311,6 +2333,10 @@ impl App {
         // text containing them arrives). Those are text, not shortcuts.
         let altgr = ctrl && alt;
         let ctrl = ctrl && !altgr;
+        // any key but Tab ends a run of folder completions
+        if !matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+            self.folder_tab = None;
+        }
         let e = &mut self.editor;
         match key.code {
             KeyCode::Esc if self.mode == Mode::Filter => {
@@ -2333,6 +2359,12 @@ impl App {
             KeyCode::Tab if self.mode == Mode::SandboxInput => {
                 self.sandbox_net = !self.sandbox_net;
             }
+            KeyCode::Tab | KeyCode::BackTab if self.mode == Mode::FolderInput => {
+                let back =
+                    key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT);
+                self.folder_complete(back);
+                return;
+            }
             KeyCode::Up if self.mode == Mode::Filter => self.move_selection(-1),
             KeyCode::Down if self.mode == Mode::Filter => self.move_selection(1),
             KeyCode::Enter => {
@@ -2350,6 +2382,7 @@ impl App {
                     }
                     Mode::HashInput => self.apply(Action::HashId(text), Source::Terminal),
                     Mode::SandboxInput => self.launch_sandboxed(&text),
+                    Mode::FolderInput => self.change_folder(&text),
                     Mode::Challenge(field) => self.challenge_step(field, text),
                     Mode::Recipe(slot) => self.recipe_value(slot, text),
                     Mode::StdinInput => {
@@ -2595,7 +2628,9 @@ impl App {
             Launch::Gui => {
                 self.console
                     .push(format!("$ {} {}", tool.run_cmd, args::join(&args)));
-                match runner::spawn_detached(runner::tool_command(&tool.run_cmd, &args)) {
+                let mut cmd = runner::tool_command(&tool.run_cmd, &args);
+                cmd.current_dir(&self.cwd);
+                match runner::spawn_detached(cmd) {
                     Ok(pid) => {
                         self.console.push(format!(
                             "── launched {name} (pid {pid}); it runs in its own window ──"
@@ -2654,6 +2689,92 @@ impl App {
         self.mode = Mode::SandboxInput;
     }
 
+    /// `d`: ask for the working folder, like `cd` in a shell.
+    fn open_folder_prompt(&mut self) {
+        self.editor.set("");
+        self.history.reset();
+        self.folder_tab = None;
+        self.mode = Mode::FolderInput;
+        self.status_line = format!("working folder: {}", self.cwd.display());
+    }
+
+    /// Tab in the folder prompt: fill in the next folder name that matches
+    /// what was typed (Shift+Tab the previous one), like PowerShell.
+    fn folder_complete(&mut self, back: bool) {
+        let (typed, matches, i) = match self.folder_tab.take() {
+            Some((typed, matches, i)) if !matches.is_empty() => {
+                let n = matches.len();
+                let i = if back { (i + n - 1) % n } else { (i + 1) % n };
+                (typed, matches, i)
+            }
+            _ => {
+                let typed = self.editor.text();
+                let matches = crate::folder::complete(&self.cwd, &typed);
+                let i = if back {
+                    matches.len().saturating_sub(1)
+                } else {
+                    0
+                };
+                (typed, matches, i)
+            }
+        };
+        match matches.get(i) {
+            Some(m) => {
+                self.editor.set(m);
+                self.status_line = if matches.len() > 1 {
+                    format!("{}/{} · Tab next · Shift+Tab back", i + 1, matches.len())
+                } else {
+                    "Enter goes there · Tab again lists what's inside".into()
+                };
+                // a single match: the next Tab looks inside it
+                if matches.len() > 1 {
+                    self.folder_tab = Some((typed, matches, i));
+                }
+            }
+            None => {
+                self.status_line = format!(
+                    "no folder matches {:?} in {}",
+                    typed.trim(),
+                    crate::folder::short(&self.cwd)
+                );
+            }
+        }
+    }
+
+    /// Enter in the folder prompt: go there (`-` = back to the previous one).
+    fn change_folder(&mut self, text: &str) {
+        let target = if text.trim() == "-" {
+            match self.prev_cwd.clone() {
+                Some(p) => Ok(p),
+                None => Err("no previous folder yet".to_string()),
+            }
+        } else {
+            crate::folder::resolve(&self.cwd, text)
+        };
+        match target {
+            Ok(dir) => self.set_cwd(dir),
+            Err(e) => {
+                self.status_line = e.clone();
+                self.toast(ToastKind::Err, e);
+            }
+        }
+    }
+
+    /// Make `dir` the working folder and say so in the console.
+    fn set_cwd(&mut self, dir: PathBuf) {
+        if dir == self.cwd {
+            return;
+        }
+        self.prev_cwd = Some(std::mem::replace(&mut self.cwd, dir));
+        let short = crate::folder::short(&self.cwd);
+        self.console.push(format!(
+            ":: working folder: {} · tools run here",
+            self.cwd.display()
+        ));
+        self.status_line = format!("working folder: {short}");
+        self.toast(ToastKind::Info, format!("in {short}"));
+    }
+
     /// Start the selected tool in Windows Sandbox on `target` (a file or a
     /// folder, or nothing), network off unless switched on in the prompt.
     fn launch_sandboxed(&mut self, target: &str) {
@@ -2689,7 +2810,8 @@ impl App {
                 exe_rel,
                 console: tool.launch == Launch::Stream,
                 deps,
-                target: (!target.is_empty()).then(|| std::path::PathBuf::from(target)),
+                target: (!target.trim().is_empty())
+                    .then(|| crate::folder::expand(&self.cwd, target)),
                 out: out.clone(),
                 network: self.sandbox_net,
             };
@@ -3096,6 +3218,9 @@ impl App {
             "installing": self.installing,
             "detecting": self.detecting,
             "status_line": self.status_line,
+            // the working folder, shown read-only (`d` in the terminal changes
+            // it); the profile reads as ~ so guests don't see the user name
+            "cwd": crate::folder::short(&self.cwd),
             "history": history,
             "challenge": self.challenge.as_ref().map(|w| serde_json::json!({
                 "id": w.id,
@@ -3884,6 +4009,87 @@ mod tests {
             a.on_key(key(KeyCode::Char(c)));
         }
         a.on_key(key(KeyCode::Enter));
+    }
+
+    #[test]
+    fn d_changes_the_working_folder_like_cd() {
+        let root = std::env::temp_dir()
+            .join("winsploit-app-tests")
+            .join("folders");
+        for d in ["htb\\Lame\\loot", "htb\\Legacy", "picoctf"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        let mut a = app();
+        a.cwd = root.clone();
+
+        // d opens the prompt; a relative path goes there
+        a.on_key(key(KeyCode::Char('d')));
+        assert_eq!(a.mode, Mode::FolderInput);
+        type_line(&mut a, "htb");
+        assert_eq!(a.mode, Mode::Browsing);
+        assert_eq!(a.cwd, root.join("htb"));
+        assert!(a
+            .console
+            .output
+            .iter()
+            .any(|l| l.contains("working folder:")));
+
+        // Tab cycles the matches (case-insensitive), Shift+Tab goes back
+        a.on_key(key(KeyCode::Char('d')));
+        a.on_key(key(KeyCode::Char('l')));
+        a.on_key(key(KeyCode::Tab));
+        assert_eq!(a.editor.text(), "Lame\\");
+        a.on_key(key(KeyCode::Tab));
+        assert_eq!(a.editor.text(), "Legacy\\");
+        a.on_key(key(KeyCode::Tab));
+        assert_eq!(a.editor.text(), "Lame\\", "wraps around");
+        a.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert_eq!(a.editor.text(), "Legacy\\");
+        a.on_key(key(KeyCode::Enter));
+        assert_eq!(a.cwd, root.join("htb").join("Legacy"));
+
+        // - goes back to the previous folder; .. climbs
+        a.on_key(key(KeyCode::Char('d')));
+        type_line(&mut a, "-");
+        assert_eq!(a.cwd, root.join("htb"));
+        a.on_key(key(KeyCode::Char('d')));
+        type_line(&mut a, "..");
+        assert_eq!(a.cwd, root);
+
+        // a missing folder keeps you where you are, with a clear error
+        a.on_key(key(KeyCode::Char('d')));
+        type_line(&mut a, "nope");
+        assert_eq!(a.cwd, root);
+        assert!(
+            a.status_line.contains("no such folder"),
+            "{}",
+            a.status_line
+        );
+
+        // Esc cancels without moving
+        a.on_key(key(KeyCode::Char('d')));
+        a.on_key(key(KeyCode::Char('p')));
+        a.on_key(key(KeyCode::Esc));
+        assert_eq!(a.mode, Mode::Browsing);
+        assert_eq!(a.cwd, root);
+
+        // the folder reaches the web view (profile shown as ~)
+        let st: serde_json::Value = serde_json::from_str(&a.web_state_json()).unwrap();
+        assert_eq!(st["cwd"], crate::folder::short(&root));
+    }
+
+    #[test]
+    fn switching_challenge_moves_into_its_folder() {
+        let root = std::env::temp_dir()
+            .join("winsploit-app-tests")
+            .join("challenge-cwd");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut a = app();
+        a.ctf_root = root.clone();
+        let ws = Workspace::create(&root, "acme", "web login", "", "").unwrap();
+        let dir = ws.dir.clone();
+        a.set_challenge(Some(ws));
+        assert_eq!(a.cwd, dir);
     }
 
     #[test]

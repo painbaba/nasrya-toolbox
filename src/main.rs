@@ -3,6 +3,7 @@
 //! Usage:
 //!   winsploit [--catalog <path>]         launch the interactive dashboard (TUI)
 //!       [--web | --no-web] [--port <n>]  open it in the browser too / skip the question
+//!       [-C <folder>]                    work in <folder> (tools run there; `d` changes it)
 //!   winsploit [--catalog <path>] list    print the tool catalog and exit
 //!   winsploit hashid <hash>...           identify hash types
 //!   winsploit --help                     show this help
@@ -18,6 +19,7 @@ mod envpath;
 mod firewall;
 mod firstrun;
 mod flags;
+mod folder;
 mod hashid;
 mod install;
 mod recipe;
@@ -45,9 +47,10 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 fn main() -> Result<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
 
-    // --catalog <path> / --catalog=<path>, --web, --no-web, --lan and
-    // --port <n> may appear anywhere.
+    // --catalog <path> / --catalog=<path>, --web, --no-web, --lan,
+    // --port <n> and -C / --dir <folder> may appear anywhere.
     let mut catalog: Option<PathBuf> = None;
+    let mut dir: Option<PathBuf> = None;
     let mut web = WebOpts {
         start: app::StartMode::Ask,
         port: None,
@@ -77,6 +80,17 @@ fn main() -> Result<()> {
                     std::process::exit(2);
                 }
             }
+        } else if args[i] == "-C" || args[i] == "--dir" || args[i].starts_with("--dir=") {
+            let v = match args.remove(i).strip_prefix("--dir=") {
+                Some(v) => v.to_string(),
+                None if i < args.len() => args.remove(i),
+                None => String::new(),
+            };
+            if v.trim().is_empty() {
+                eprintln!("winsploit: -C needs a folder");
+                std::process::exit(2);
+            }
+            dir = Some(PathBuf::from(v));
         } else if let Some(v) = args[i].strip_prefix("--catalog=") {
             catalog = Some(PathBuf::from(v));
             args.remove(i);
@@ -92,6 +106,23 @@ fn main() -> Result<()> {
         }
     }
 
+    // -C: work in that folder, as if winsploit had been started there (tools
+    // run in the working folder; `d` changes it later)
+    if let Some(d) = &dir {
+        match folder::initial(Some(d)) {
+            Ok(path) => {
+                if let Err(e) = std::env::set_current_dir(&path) {
+                    eprintln!("winsploit: -C {}: {e}", path.display());
+                    std::process::exit(2);
+                }
+            }
+            Err(e) => {
+                eprintln!("winsploit: {e}");
+                std::process::exit(2);
+            }
+        }
+    }
+
     match args.first().map(String::as_str) {
         Some("--help") | Some("-h") | Some("help") => {
             print_help();
@@ -104,13 +135,22 @@ fn main() -> Result<()> {
         Some("list") => list(catalog.as_deref()),
         Some("setup") => {
             let flags = &args[1..];
-            if let Some(bad) = flags.iter().find(|a| *a != "--buckets" && *a != "--pipx") {
+            if let Some(bad) = flags
+                .iter()
+                .find(|a| !["--buckets", "--pipx", "--path"].contains(&a.as_str()))
+            {
                 eprintln!("winsploit: setup: unknown option '{bad}'");
                 std::process::exit(2);
             }
-            let Loaded { catalog, .. } = load_catalog(catalog.as_deref())?;
             let buckets = flags.iter().any(|a| a == "--buckets");
             let pipx = flags.iter().any(|a| a == "--pipx");
+            if flags.iter().any(|a| a == "--path") {
+                add_self_to_path();
+                if !buckets && !pipx {
+                    return Ok(());
+                }
+            }
+            let Loaded { catalog, .. } = load_catalog(catalog.as_deref())?;
             if let Err(e) = setup::run(&catalog, buckets, pipx) {
                 eprintln!("winsploit: setup: {e:#}");
                 std::process::exit(1);
@@ -298,6 +338,41 @@ fn run_tui(explicit: Option<&Path>, web: WebOpts) -> Result<()> {
     result
 }
 
+/// `winsploit setup --path`: put the folder this winsploit.exe is in on the
+/// user PATH, so typing `winsploit` works in any new terminal. From a source
+/// checkout that's target\release: each `cargo build --release` then
+/// updates the command, and the catalog is found in the checkout.
+fn add_self_to_path() {
+    let dir = match std::env::current_exe() {
+        Ok(exe) => exe.parent().map(std::path::Path::to_path_buf),
+        Err(_) => None,
+    };
+    let Some(dir) = dir else {
+        eprintln!("winsploit: setup --path: can't tell where winsploit.exe is");
+        std::process::exit(1);
+    };
+    if dir.ends_with(r"target\debug") {
+        eprintln!(
+            "note: this is a debug build; run `cargo build --release` and \
+             `.\\target\\release\\winsploit.exe setup --path` for the fast one"
+        );
+    }
+    match envpath::add_user_dir(&dir) {
+        Ok(true) => println!(
+            "added {} to your PATH.\nOpen a new terminal and type: winsploit",
+            dir.display()
+        ),
+        Ok(false) => println!(
+            "{} is already on your PATH: type winsploit in a new terminal",
+            dir.display()
+        ),
+        Err(e) => {
+            eprintln!("winsploit: setup --path: {e:#}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn print_help() {
     println!(
         "{}\n\
@@ -307,7 +382,12 @@ USAGE:\n\
     winsploit [--catalog <path>] list    list the tool catalog with install status\n\
     winsploit hashid <hash>...           identify hash types (+ hashcat / john modes)\n\
     winsploit --help                     show this help\n\
-    winsploit --version                  show version\n\n\
+    winsploit --version                  show version\n\
+    winsploit setup --path               put this winsploit.exe on your PATH (no admin)\n\n\
+WORKING FOLDER (where tools run, like a shell's current folder):\n\
+    winsploit -C <folder>                start in <folder> (default: where you start winsploit)\n\
+    In the dashboard: d changes it, like cd: Tab completes, .. ~ - and %VARS% work,\n\
+    a file's path means its folder. Switching challenge (C) moves you into its folder.\n\n\
 WEB VIEW (the same live session in your browser; the terminal stays in charge):\n\
     winsploit --web                      start it and open it in the browser\n\
     winsploit --no-web                   terminal only (skips the start-up question)\n\

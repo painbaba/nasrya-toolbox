@@ -164,3 +164,76 @@ mod tests {
         assert_eq!(m, r"C:\a;C:\b");
     }
 }
+
+/// The user PATH with `dir` appended, or None when it's already on it
+/// (compared case-insensitively, ignoring a trailing `\` and expanding
+/// `%VARS%` in the existing entries).
+pub fn with_dir(existing: &str, dir: &str) -> Option<String> {
+    let norm = |s: &str| s.trim().trim_end_matches('\\').to_lowercase();
+    let want = norm(dir);
+    let present = existing
+        .split(';')
+        .any(|e| norm(&expand(e, |k| std::env::var(k).ok())) == want || norm(e) == want);
+    if present {
+        return None;
+    }
+    let base = existing.trim_end_matches(';');
+    Some(if base.trim().is_empty() {
+        dir.to_string()
+    } else {
+        format!("{base};{dir}")
+    })
+}
+
+/// Put `dir` on the *user* PATH (no admin), so new terminals find
+/// winsploit.exe. Returns false when it was already there. The value keeps
+/// its REG_EXPAND_SZ type (setx and .NET's SetEnvironmentVariable would turn
+/// `%USERPROFILE%\...` entries into plain text), then running programs are
+/// told the environment changed, as the System Properties dialog does.
+pub fn add_user_dir(dir: &std::path::Path) -> anyhow::Result<bool> {
+    let dir = dir.display().to_string();
+    let existing = reg_path(USER_KEY).unwrap_or_default();
+    let Some(new) = with_dir(&existing, &dir) else {
+        return Ok(false);
+    };
+    // the new value goes in through the environment, never into the script text
+    let script = "$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true); \
+        $k.SetValue('Path', $env:WINSPLOIT_NEW_PATH, [Microsoft.Win32.RegistryValueKind]::ExpandString); \
+        $k.Close(); \
+        [Environment]::SetEnvironmentVariable('WINSPLOIT_PATH_PING', $null, 'User')";
+    let status = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .env("WINSPLOIT_NEW_PATH", &new)
+        .stdout(Stdio::null())
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("PowerShell couldn't update the user PATH ({status})");
+    }
+    Ok(true)
+}
+
+#[cfg(test)]
+mod with_dir_tests {
+    use super::with_dir;
+
+    #[test]
+    fn appends_once() {
+        let d = r"C:\Users\me\projects\nasrya-toolbox\target\release";
+        assert_eq!(with_dir("", d).as_deref(), Some(d));
+        assert_eq!(
+            with_dir(r"C:\a;C:\b;", d).unwrap(),
+            format!(r"C:\a;C:\b;{d}")
+        );
+        // already there: any case, with or without a trailing backslash
+        assert_eq!(with_dir(&format!(r"C:\a;{}\", d.to_uppercase()), d), None);
+        // %VARS% in existing entries are compared expanded
+        std::env::set_var("WINSPLOIT_TEST_HOME", r"C:\Users\me");
+        assert_eq!(
+            with_dir(
+                r"%WINSPLOIT_TEST_HOME%\projects\nasrya-toolbox\target\release",
+                d
+            ),
+            None
+        );
+    }
+}
