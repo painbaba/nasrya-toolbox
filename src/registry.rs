@@ -31,6 +31,9 @@ pub enum Launch {
     /// Local web app: optionally start `run_cmd` (a server, streamed), then
     /// open `url` in the default browser
     Web,
+    /// Data, not a program (wordlists): `exe` is a file inside the dataset;
+    /// Enter lists the folder and copies its path instead of running anything
+    Dataset,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -99,6 +102,7 @@ impl Tool {
             _ => {}
         }
         match self.launch {
+            Launch::Dataset => {}
             Launch::Web => match self.url.as_deref() {
                 None => p.push("launch: web needs a `url:`".into()),
                 Some(u)
@@ -129,18 +133,46 @@ impl Tool {
 
     /// Replace `{scoop_app}` with this tool's Scoop app directory
     /// (`<scoop root>\apps\<scoop>\current`) in exe, run_cmd and url.
+    ///
+    /// Also expands `{app:NAME}` to *another* Scoop app's directory, so an
+    /// args_hint can point at an installed dataset:
+    /// `-w "{app:seclists-lite}\common.txt"`. args_hint gets both.
     pub fn expand_scoop_app(&mut self, scoop_root: &Path) {
-        let Some(pkg) = self.scoop.as_deref() else {
-            return;
+        let own = self
+            .scoop
+            .as_deref()
+            .map(|pkg| scoop_root.join("apps").join(pkg).join("current"));
+        let expand = |s: &str| -> String {
+            let mut s = match &own {
+                Some(dir) => s.replace(SCOOP_APP, &dir.to_string_lossy()),
+                None => s.to_string(),
+            };
+            let mut from = 0;
+            while let Some(rel) = s[from..].find("{app:") {
+                let start = from + rel;
+                let Some(len) = s[start..].find('}') else {
+                    break;
+                };
+                let name = &s[start + 5..start + len];
+                let valid = !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+                if !valid {
+                    from = start + 5; // leave it as-is, keep scanning
+                    continue;
+                }
+                let dir = scoop_root.join("apps").join(name).join("current");
+                let dir = dir.to_string_lossy();
+                s.replace_range(start..start + len + 1, &dir);
+                from = start + dir.len();
+            }
+            s
         };
-        let dir = scoop_root.join("apps").join(pkg).join("current");
-        let dir = dir.to_string_lossy();
-        for field in [&mut self.exe, &mut self.run_cmd] {
-            *field = field.replace(SCOOP_APP, &dir);
-        }
-        if let Some(u) = &mut self.url {
-            *u = u.replace(SCOOP_APP, &dir);
-        }
+        self.exe = expand(&self.exe);
+        self.run_cmd = expand(&self.run_cmd);
+        self.url = self.url.as_deref().map(expand);
+        self.args_hint = self.args_hint.as_deref().map(expand);
     }
 }
 
@@ -332,6 +364,36 @@ mod tests {
     }
 
     #[test]
+    fn app_placeholder_in_args_hint() {
+        let mut c = parse(
+            "tools:\n\
+             \x20 - {name: gobuster, exe: gobuster, scoop: gobuster, run_cmd: gobuster, args_hint: 'dir -w \"{app:seclists-lite}\\common.txt\" -u x'}\n\
+             \x20 - {name: wl, exe: '{scoop_app}\\common.txt', scoop: seclists-lite, bucket: nasrya, launch: dataset}\n\
+             \x20 - {name: odd, exe: x, scoop: x, run_cmd: x, args_hint: '{app:} {app:a b} {app:ok} {app:unclosed'}\n",
+        )
+        .unwrap();
+        let root = Path::new(r"C:\s");
+        for t in &mut c.tools {
+            t.expand_scoop_app(root);
+        }
+        assert_eq!(
+            c.tools[0].args_hint.as_deref(),
+            Some(r#"dir -w "C:\s\apps\seclists-lite\current\common.txt" -u x"#)
+        );
+        assert_eq!(
+            c.tools[1].exe,
+            r"C:\s\apps\seclists-lite\current\common.txt"
+        );
+        assert_eq!(c.tools[1].launch, Launch::Dataset);
+        // malformed placeholders are left alone (and don't loop forever);
+        // a valid one after them is still expanded
+        assert_eq!(
+            c.tools[2].args_hint.as_deref(),
+            Some(r"{app:} {app:a b} C:\s\apps\ok\current {app:unclosed")
+        );
+    }
+
+    #[test]
     fn scoop_app_needs_a_scoop_package() {
         assert!(parse(
             "tools:\n  - {name: x, exe: '{scoop_app}\\x.exe', install: pipx, pipx: x, run_cmd: x}\n"
@@ -347,6 +409,36 @@ mod tests {
     #[test]
     fn unknown_install_backend_is_an_error() {
         assert!(parse("tools:\n  - {name: a, exe: a, install: npm, run_cmd: a}\n").is_err());
+    }
+
+    #[test]
+    fn shipped_catalog_has_no_escape_accidents() {
+        // In YAML double quotes, "\raft" is a carriage return and "\x.." a hex
+        // escape, so Windows paths must be single-quoted. Catch slips.
+        let mut c = parse(include_str!("../tools.yaml")).unwrap();
+        for t in &mut c.tools {
+            t.expand_scoop_app(Path::new(r"C:\s"));
+            let fields = [
+                Some(&t.exe),
+                Some(&t.run_cmd),
+                t.args_hint.as_ref(),
+                t.url.as_ref(),
+                t.note.as_ref(),
+            ];
+            for f in fields.into_iter().flatten() {
+                assert!(
+                    !f.chars().any(char::is_control),
+                    "{}: control char in {f:?}",
+                    t.name
+                );
+            }
+        }
+        let gob = c.tools.iter().find(|t| t.name == "gobuster").unwrap();
+        let argv = crate::args::split(gob.args_hint.as_deref().unwrap()).unwrap();
+        assert!(
+            argv.contains(&r"C:\s\apps\seclists-lite\current\common.txt".to_string()),
+            "{argv:?}"
+        );
     }
 
     #[test]

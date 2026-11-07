@@ -128,6 +128,33 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
         .map(|_| ())
 }
 
+/// Put `text` on the Windows clipboard via clip.exe. clip reads its stdin in
+/// the console's codepage, so send UTF-16LE with a BOM, which it always
+/// understands, to keep non-ASCII paths intact.
+pub fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut child = Command::new("clip")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let mut bytes = vec![0xFF, 0xFE];
+    for u in text.encode_utf16() {
+        bytes.extend_from_slice(&u.to_le_bytes());
+    }
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(&bytes)?;
+    }
+    let status = child.wait()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "clip.exe exited with {status}"
+        )))
+    }
+}
+
 /// Kill a process and its whole tree (taskkill /T). Best-effort.
 pub fn kill_tree(pid: u32) {
     let _ = Command::new("taskkill")

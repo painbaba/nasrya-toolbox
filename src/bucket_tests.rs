@@ -73,7 +73,14 @@ fn manifests_are_well_formed() {
         );
         assert!(m.get("homepage").is_some(), "{name}: no homepage");
         assert!(m.get("license").is_some(), "{name}: no license");
-        assert!(m.get("bin").is_some(), "{name}: no bin");
+        let dataset = m
+            .get("##")
+            .and_then(Value::as_str)
+            .is_some_and(|c| c.starts_with("dataset"));
+        assert!(
+            dataset || m.get("bin").is_some(),
+            "{name}: no bin (mark data-only manifests with \"##\": \"dataset: ...\")"
+        );
         let dl = downloads(m);
         assert!(!dl.is_empty(), "{name}: no url");
         for (urls, hashes) in dl {

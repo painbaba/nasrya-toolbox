@@ -1,0 +1,52 @@
+{
+    "version": "2026.2",
+    "description": "SecLists essentials: the most-used web, DNS, password, username and LFI wordlists (a curated subset of SecLists, flat in one folder)",
+    "homepage": "https://github.com/danielmiessler/SecLists",
+    "license": "MIT",
+    "##": "dataset: wordlists only, no executables. Full SecLists is ~3.7 GB; this pins the essentials to a release tag.",
+    "url": [
+        "https://raw.githubusercontent.com/danielmiessler/SecLists/2026.2/Discovery/Web-Content/common.txt",
+        "https://raw.githubusercontent.com/danielmiessler/SecLists/2026.2/Discovery/Web-Content/raft-medium-directories.txt",
+        "https://raw.githubusercontent.com/danielmiessler/SecLists/2026.2/Discovery/Web-Content/raft-medium-files.txt",
+        "https://raw.githubusercontent.com/danielmiessler/SecLists/2026.2/Discovery/Web-Content/DirBuster-2007_directory-list-2.3-medium.txt",
+        "https://raw.githubusercontent.com/danielmiessler/SecLists/2026.2/Discovery/Web-Content/burp-parameter-names.txt",
+        "https://raw.githubusercontent.com/danielmiessler/SecLists/2026.2/Discovery/Web-Content/api/api-endpoints.txt",
+        "https://raw.githubusercontent.com/danielmiessler/SecLists/2026.2/Discovery/DNS/subdomains-top1million-5000.txt",
+        "https://raw.githubusercontent.com/danielmiessler/SecLists/2026.2/Discovery/DNS/subdomains-top1million-20000.txt",
+        "https://raw.githubusercontent.com/danielmiessler/SecLists/2026.2/Passwords/Common-Credentials/10k-most-common.txt",
+        "https://raw.githubusercontent.com/danielmiessler/SecLists/2026.2/Passwords/Common-Credentials/xato-net-10-million-passwords-10000.txt",
+        "https://raw.githubusercontent.com/danielmiessler/SecLists/2026.2/Usernames/top-usernames-shortlist.txt",
+        "https://raw.githubusercontent.com/danielmiessler/SecLists/2026.2/Fuzzing/LFI/LFI-Jhaddix.txt"
+    ],
+    "hash": [
+        "47fb86ca6fb3f97e5491161581900d6d99851fb16764eacddf16aa85617c956a",
+        "a9626959f818d9e198259665c5a88053b7b061c538f46da215d172bcba305fe9",
+        "0a0ae977d8227256d4c4f3a2b96ddbe620c37bba861fe3d28eb529e1aa929e14",
+        "d7619fe257485f3be56316c888e7392b2a0b1d4fce3593d298e8ab604118eaa7",
+        "91f7e457415ffd0e4278d13887804036b62240a135a022a6fd6e831a7151899f",
+        "7860e451bec345a022018a4f76c820d2e7e130df480e31b80dc35dda06762a46",
+        "e331367c140298cb179114fdeefa78f58f696219f0dec017a28bb79487cfcf19",
+        "685fad386d19c3b7ecbcd18645606bc5c47a3b2339fa3d79f44c46bd9e79c1ef",
+        "68782d6a4a19a4768d5f15dd66bd534e7a33055cc755411e33f16d18c50fdcce",
+        "c63d5e4ccc31344d662583cc39ca4bd5bd20517ff1d24501f0c4e0c22d9b722a",
+        "dc44775d12dcdb4027017623ffaa935a018944839ce4b204ccb0c6ef566db5dd",
+        "2fe4a8e45cb25ced4cd21344744c7821acdf050ce07bf3299d7ef3529cacf1a3"
+    ],
+    "checkver": "github",
+    "autoupdate": {
+        "url": [
+            "https://raw.githubusercontent.com/danielmiessler/SecLists/$version/Discovery/Web-Content/common.txt",
+            "https://raw.githubusercontent.com/danielmiessler/SecLists/$version/Discovery/Web-Content/raft-medium-directories.txt",
+            "https://raw.githubusercontent.com/danielmiessler/SecLists/$version/Discovery/Web-Content/raft-medium-files.txt",
+            "https://raw.githubusercontent.com/danielmiessler/SecLists/$version/Discovery/Web-Content/DirBuster-2007_directory-list-2.3-medium.txt",
+            "https://raw.githubusercontent.com/danielmiessler/SecLists/$version/Discovery/Web-Content/burp-parameter-names.txt",
+            "https://raw.githubusercontent.com/danielmiessler/SecLists/$version/Discovery/Web-Content/api/api-endpoints.txt",
+            "https://raw.githubusercontent.com/danielmiessler/SecLists/$version/Discovery/DNS/subdomains-top1million-5000.txt",
+            "https://raw.githubusercontent.com/danielmiessler/SecLists/$version/Discovery/DNS/subdomains-top1million-20000.txt",
+            "https://raw.githubusercontent.com/danielmiessler/SecLists/$version/Passwords/Common-Credentials/10k-most-common.txt",
+            "https://raw.githubusercontent.com/danielmiessler/SecLists/$version/Passwords/Common-Credentials/xato-net-10-million-passwords-10000.txt",
+            "https://raw.githubusercontent.com/danielmiessler/SecLists/$version/Usernames/top-usernames-shortlist.txt",
+            "https://raw.githubusercontent.com/danielmiessler/SecLists/$version/Fuzzing/LFI/LFI-Jhaddix.txt"
+        ]
+    }
+}

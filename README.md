@@ -190,6 +190,19 @@ Some apps aren't put on PATH by Scoop (only a Start-menu shortcut), and some are
 page. For those, `{scoop_app}` in `exe`, `run_cmd` or `url` expands to the app's Scoop folder:
 `exe: '{scoop_app}\dnSpy.exe'`, or `url: '{scoop_app}\CyberChef.html'` with `launch: web`.
 
+**Wordlists and other data** use `launch: dataset`. There's nothing to run, so Enter lists the
+files and copies the folder path to the clipboard. `{app:NAME}` points another tool's
+arguments at an installed dataset. The shipped `seclists-lite` (the most-used SecLists files,
+pinned and hash-checked) is wired into gobuster, ffuf, feroxbuster, dirsearch, wfuzz and john
+this way:
+
+```yaml
+    args_hint: 'dir -u https://example.com -w "{app:seclists-lite}\common.txt"'
+```
+
+Write Windows paths in `'single quotes'`: inside `"double quotes"`, YAML turns `\r`, `\x`, ...
+into escape sequences.
+
 Some names are shared by unrelated programs (ProjectDiscovery's `httpx` and the Python
 `httpx` CLI, Sysinternals `strings` and GNU `strings`). `verify:` checks that the `exe` found on
 PATH is the right one: `verify: { args: "-version", contains: "projectdiscovery" }`. If it

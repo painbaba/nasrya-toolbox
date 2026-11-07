@@ -260,7 +260,10 @@ impl App {
                 self.mode = Mode::HashInput;
             }
             KeyCode::Enter => {
-                if self.running {
+                if self.tools[self.selected].launch == Launch::Dataset {
+                    // nothing to run, so no args prompt
+                    self.show_dataset();
+                } else if self.running {
                     self.status_line = "a process is already running (press c to cancel)".into();
                 } else {
                     let hint = self.tools[self.selected].args_hint.clone();
@@ -410,6 +413,62 @@ impl App {
                     }
                 }
             }
+            Launch::Dataset => self.show_dataset(),
+        }
+    }
+
+    /// Enter on a dataset: list its files and copy the folder path, so it can
+    /// be pasted into another tool's arguments.
+    fn show_dataset(&mut self) {
+        let tool = self.tools[self.selected].clone();
+        match self.status[self.selected] {
+            ToolStatus::Installed => {}
+            ToolStatus::Unknown => {
+                self.status_line = "still detecting tools — try again in a moment".into();
+                return;
+            }
+            _ => {
+                self.push(format!(
+                    "'{}' is not installed — press i to install it first.",
+                    tool.name
+                ));
+                return;
+            }
+        }
+        let Some(dir) = std::path::Path::new(&tool.exe)
+            .parent()
+            .map(|d| d.to_path_buf())
+        else {
+            return;
+        };
+        self.push(format!(":: {} — {}", tool.name, dir.display()));
+        let mut files: Vec<(String, u64)> = std::fs::read_dir(&dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+                    .map(|e| {
+                        let size = e.metadata().map(|m| m.len()).unwrap_or(0);
+                        (e.file_name().to_string_lossy().to_string(), size)
+                    })
+                    .filter(|(n, _)| {
+                        !n.eq_ignore_ascii_case("manifest.json")
+                            && !n.eq_ignore_ascii_case("install.json")
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        files.sort();
+        let w = files
+            .iter()
+            .map(|(n, _)| n.chars().count())
+            .max()
+            .unwrap_or(0);
+        for (n, size) in files {
+            self.push(format!("   {n:<w$}  {:>8.1} KB", size as f64 / 1024.0));
+        }
+        match runner::copy_to_clipboard(&dir.to_string_lossy()) {
+            Ok(()) => self.push(":: folder path copied to the clipboard"),
+            Err(e) => self.push(format!("[err] couldn't copy the path: {e}")),
         }
     }
 

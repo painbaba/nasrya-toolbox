@@ -15,7 +15,9 @@
 #   run_cmd     the command actually launched (may be empty for a URL-only web tool)
 #   args_hint   arguments prefilled when you press Enter (edit before running)
 #   launch      (optional) stream (default: output in the pane) | gui (desktop app,
-#               started detached) | web (start run_cmd if any, then open `url`)
+#               started detached) | web (start run_cmd if any, then open `url`) |
+#               dataset (data such as wordlists: no run_cmd; Enter lists the files and
+#               copies the folder path)
 #   url         http(s) URL opened by launch: web
 #   note        (optional) caveat shown every time the tool is run
 #   verify      (optional) { args: "-version", contains: "text" }: run exe with args at
@@ -26,6 +28,10 @@
 # (<scoop root>\apps\<scoop>\current). Use it for files Scoop doesn't put on
 # PATH, e.g. exe: '{scoop_app}\dnSpy.exe'. `exe` may be any file that proves the
 # install, and a web tool's url may be a local '{scoop_app}\page.html'.
+# {app:NAME} expands to another Scoop app's directory, in exe / run_cmd / url /
+# args_hint, e.g. args_hint: '-w "{app:seclists-lite}\common.txt"'.
+# Write Windows paths in 'single quotes': inside "double quotes" YAML treats \r,
+# \x, \c ... as escape sequences.
 #
 # buckets: maps a bucket name to its git URL. Only needed for buckets Scoop
 # doesn't know by name (extras, versions, java, ... need no entry).
@@ -88,7 +94,7 @@ tools:
     exe: ffuf
     scoop: ffuf
     run_cmd: ffuf
-    args_hint: "-V"
+    args_hint: '-u https://example.com/FUZZ -w "{app:seclists-lite}\common.txt"'
     bucket: security
 
   - name: gobuster
@@ -97,7 +103,7 @@ tools:
     exe: gobuster
     scoop: gobuster
     run_cmd: gobuster
-    args_hint: "dir -u https://example.com -w wordlist.txt"
+    args_hint: 'dir -u https://example.com -w "{app:seclists-lite}\common.txt"'
 
   - name: feroxbuster
     category: web
@@ -105,7 +111,7 @@ tools:
     exe: feroxbuster
     scoop: feroxbuster
     run_cmd: feroxbuster
-    args_hint: "-u https://example.com"
+    args_hint: '-u https://example.com -w "{app:seclists-lite}\raft-medium-directories.txt"'
 
   - name: httpx
     category: recon
@@ -226,7 +232,7 @@ tools:
     install: pipx
     pipx: dirsearch
     run_cmd: dirsearch
-    args_hint: "-u https://example.com"
+    args_hint: '-u https://example.com -w "{app:seclists-lite}\common.txt"'
     note: needs Python 3.11+
 
   - name: wfuzz
@@ -236,7 +242,7 @@ tools:
     install: pipx
     pipx: wfuzz
     run_cmd: wfuzz
-    args_hint: "-c -z file,wordlist.txt --hc 404 https://example.com/FUZZ"
+    args_hint: '-c -z "file,{app:seclists-lite}\common.txt" --hc 404 https://example.com/FUZZ'
     note: wfuzz depends on pycurl and was last released in 2020; if the install fails on a new Python, ffuf or feroxbuster cover the same ground
 
   - name: commix
@@ -421,7 +427,7 @@ tools:
     scoop: john-jumbo
     bucket: nasrya
     run_cmd: john
-    args_hint: "--wordlist=wordlist.txt hashes.txt"
+    args_hint: '--wordlist="{app:seclists-lite}\xato-net-10-million-passwords-10000.txt" hashes.txt'
     note: official Openwall Windows build (1.9.0-jumbo-1, 2019); zip2john, rar2john, keepass2john etc. are on PATH too
 
   - name: steghide
@@ -442,3 +448,12 @@ tools:
     bucket: nasrya
     run_cmd: nikto
     args_hint: "-h https://example.com"
+
+  - name: seclists-lite
+    category: wordlists
+    description: SecLists essentials - web, DNS, password, username and LFI wordlists
+    exe: '{scoop_app}\common.txt'
+    scoop: seclists-lite
+    bucket: nasrya
+    launch: dataset
+    note: other tools' args already point at these lists; Enter shows the files and copies the folder path
