@@ -416,6 +416,17 @@ function renderChallenge() {
   $('challenge-target').textContent = active && active.target ? active.target : '';
 }
 
+$('recipe').addEventListener('change', (e) => {
+  const t = S.tools[S.sel];
+  const list = (S.st && S.st.recipes && t && S.st.recipes[t.name]) || [];
+  const r = list[Number(e.target.value)];
+  if (r) {
+    $('args').value = r.args;
+    $('args').focus();
+  }
+  e.target.value = '';
+});
+
 $('challenge').addEventListener('change', (e) => {
   if (e.target.value) act({ type: 'challenge', id: e.target.value });
 });
@@ -828,6 +839,16 @@ function renderCard() {
     S.argsFor = t.name;
     $('args').value = history.length ? history[history.length - 1] : (t.args_hint || '');
   }
+  // recipes: filled from the active challenge; {target}-style gaps are
+  // left for you to replace
+  const recipes = (st.recipes && st.recipes[t.name]) || [];
+  const rsel = $('recipe');
+  const rsig = JSON.stringify([t.name, recipes]);
+  if (rsel.dataset.sig !== rsig) {
+    rsel.dataset.sig = rsig;
+    rsel.replaceChildren(new Option('Recipe…', ''), ...recipes.map((r, i) => new Option(r.name, String(i))));
+  }
+  rsel.hidden = recipes.length === 0 || t.launch === 'dataset';
   $('args-history').replaceChildren(...history.slice().reverse().map((h) => {
     const o = document.createElement('option');
     o.value = h;

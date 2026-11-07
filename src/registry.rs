@@ -49,6 +49,13 @@ pub enum Sandbox {
     Recommended,
 }
 
+/// A named argument preset (see recipe.rs for the placeholders).
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub struct Recipe {
+    pub name: String,
+    pub args: String,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Tool {
     pub name: String,
@@ -102,6 +109,9 @@ pub struct Tool {
     /// (runtimes, e.g. a JDK for Ghidra).
     #[serde(default)]
     pub sandbox_deps: Vec<String>,
+    /// Named argument presets; Enter offers them before the args prompt.
+    #[serde(default)]
+    pub recipes: Vec<Recipe>,
 }
 
 /// `exe <args>` must print something containing `contains` (any case, on
@@ -179,6 +189,21 @@ impl Tool {
         } else if !self.sandbox_deps.is_empty() {
             p.push("`sandbox_deps:` without `sandbox:`".into());
         }
+        let mut names: Vec<&str> = Vec::new();
+        for r in &self.recipes {
+            if r.name.trim().is_empty() {
+                p.push("a recipe needs a `name:`".into());
+            } else if names.contains(&r.name.as_str()) {
+                p.push(format!("two recipes are called {:?}", r.name));
+            }
+            names.push(r.name.as_str());
+            for e in crate::recipe::problems(&r.args) {
+                p.push(format!("recipe {:?}: {e}", r.name));
+            }
+        }
+        if !self.recipes.is_empty() && self.launch == Launch::Dataset {
+            p.push("datasets don't run, so they can't have recipes".into());
+        }
         for d in &self.sandbox_deps {
             let ok = !d.is_empty()
                 && d.chars()
@@ -243,6 +268,9 @@ impl Tool {
         self.run_cmd = expand(&self.run_cmd);
         self.url = self.url.as_deref().map(expand);
         self.args_hint = self.args_hint.as_deref().map(expand);
+        for r in &mut self.recipes {
+            r.args = expand(&r.args);
+        }
     }
 }
 
@@ -490,6 +518,31 @@ mod tests {
         .unwrap();
         assert_eq!(c.tools[0].install, Install::Pipx);
         assert_eq!(c.tools[1].launch, Launch::Web);
+    }
+
+    #[test]
+    fn recipes_parse_and_validate() {
+        let c = parse(
+            "tools:\n\
+             \x20 - {name: n, exe: n, scoop: n, run_cmd: n, recipes: [{name: quick, args: '-sV {target}'}]}\n",
+        )
+        .unwrap();
+        assert_eq!(c.tools[0].recipes[0].name, "quick");
+        let e = parse(
+            "tools:\n\
+             \x20 - {name: a, exe: a, scoop: a, run_cmd: a, recipes: [{name: x, args: '-u \"{target}\"'}]}\n\
+             \x20 - {name: b, exe: b, scoop: b, run_cmd: b, recipes: [{name: x, args: '{targt}'}]}\n\
+             \x20 - {name: c, exe: c, scoop: c, run_cmd: c, recipes: [{name: x, args: ''}, {name: x, args: ''}]}\n",
+        )
+        .unwrap_err();
+        let msg = format!("{e:#}");
+        for needle in [
+            "a: recipe \"x\": {target} is inside quotes",
+            "b: recipe \"x\": unknown placeholder {targt}",
+            "c: two recipes are called \"x\"",
+        ] {
+            assert!(msg.contains(needle), "{needle} missing from:\n{msg}");
+        }
     }
 
     #[test]

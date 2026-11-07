@@ -28,6 +28,11 @@
 #   verify      (optional) { args: "-version", contains: "text" }: run exe with args at
 #               detection time (3 s timeout); if the output lacks the text, the exe on
 #               PATH is a different program with the same name -> shown as a conflict
+#   recipes     (optional) named argument presets; Enter offers them before the args prompt:
+#               recipes: [{ name: quick, args: '-sV -T4 {target}' }]. Placeholders, filled
+#               from the active challenge (C), written UNQUOTED (values are quoted for you):
+#               {target} IP/host/URL/nc  {file} a challenge file  {out} the challenge's out\
+#               folder  {wordlist} the default wordlist. Missing values are asked for.
 #   sandbox     (optional) never (default) | optional | recommended: `S` runs the tool in
 #               Windows Sandbox (throwaway VM; sample read-only, network off by default).
 #               Scoop gui/stream tools only. Use recommended for tools that execute the
@@ -65,6 +70,11 @@ tools:
     scoop: nmap
     run_cmd: nmap
     args_hint: "-sV -T4 scanme.nmap.org"
+    recipes:
+      - { name: quick, args: '-sV -T4 {target}' }
+      - { name: full, args: '-p- -sV -sC -T4 {target} -oN {out}\nmap-full.txt' }
+      - { name: udp, args: '-sU --top-ports 100 {target}' }
+      - { name: vuln scripts, args: '--script vuln {target}' }
 
   - name: sqlmap
     categories: [web, exploit]
@@ -73,6 +83,10 @@ tools:
     scoop: sqlmap
     run_cmd: sqlmap
     args_hint: "--version"
+    recipes:
+      - { name: test the url, args: '-u {target} --batch' }
+      - { name: list databases, args: '-u {target} --batch --dbs' }
+      - { name: crawl forms, args: '-u {target} --batch --forms --crawl=2' }
 
   - name: hashcat
     categories: [passwords, crypto]
@@ -81,6 +95,10 @@ tools:
     scoop: hashcat
     run_cmd: hashcat
     args_hint: "--version"
+    recipes:
+      - { name: wordlist (auto mode), args: '-a 0 {file} "{app:seclists-lite}\xato-net-10-million-passwords-10000.txt"' }
+      - { name: identify the hash type, args: '--identify {file}' }
+      - { name: show cracked, args: '--show {file}' }
 
   - name: tshark
     categories: [network, forensics]
@@ -98,6 +116,9 @@ tools:
     run_cmd: nuclei
     args_hint: "-version"
     bucket: security
+    recipes:
+      - { name: scan, args: '-u {target}' }
+      - { name: medium and up, args: '-u {target} -severity medium,high,critical' }
 
   - name: ffuf
     categories: [web, recon]
@@ -107,6 +128,10 @@ tools:
     run_cmd: ffuf
     args_hint: '-u https://example.com/FUZZ -w "{app:seclists-lite}\common.txt"'
     bucket: security
+    recipes:
+      - { name: dirs, args: '-u {target}/FUZZ -w {wordlist}' }
+      - { name: dirs + extensions, args: '-u {target}/FUZZ -w {wordlist} -e .php,.txt,.bak' }
+      - { name: recursive, args: '-u {target}/FUZZ -w {wordlist} -recursion -recursion-depth 2' }
 
   - name: gobuster
     categories: [recon, web]
@@ -115,6 +140,9 @@ tools:
     scoop: gobuster
     run_cmd: gobuster
     args_hint: 'dir -u https://example.com -w "{app:seclists-lite}\common.txt"'
+    recipes:
+      - { name: dirs, args: 'dir -u {target} -w {wordlist}' }
+      - { name: dirs + extensions, args: 'dir -u {target} -w {wordlist} -x php,txt,bak' }
 
   - name: feroxbuster
     categories: [web, recon]
@@ -123,6 +151,9 @@ tools:
     scoop: feroxbuster
     run_cmd: feroxbuster
     args_hint: '-u https://example.com -w "{app:seclists-lite}\raft-medium-directories.txt"'
+    recipes:
+      - { name: dirs, args: '-u {target} -w {wordlist}' }
+      - { name: depth 2 + extensions, args: '-u {target} -w {wordlist} -x php,txt -d 2' }
 
   - name: httpx
     categories: [recon, web]
@@ -160,6 +191,8 @@ tools:
     run_cmd: katana
     args_hint: "-u https://example.com"
     bucket: security
+    recipes:
+      - { name: crawl, args: '-u {target} -d 3' }
 
   - name: rustscan
     categories: [network, recon]
@@ -168,6 +201,9 @@ tools:
     scoop: rustscan
     run_cmd: rustscan
     args_hint: "-a 127.0.0.1 -- -sV"
+    recipes:
+      - { name: quick, args: '-a {target} -- -sV' }
+      - { name: all ports, args: '-a {target} -r 1-65535 -- -sV -sC' }
 
   - name: openssl
     categories: [crypto, network]
@@ -184,6 +220,9 @@ tools:
     scoop: exiftool
     run_cmd: exiftool
     args_hint: "image.jpg"
+    recipes:
+      - { name: metadata, args: '{file}' }
+      - { name: everything, grouped, args: '-a -u -g1 {file}' }
 
   - name: strings
     categories: [forensics, reversing]
@@ -193,6 +232,9 @@ tools:
     run_cmd: strings
     args_hint: "-accepteula -n 8 target.bin"
     bucket: extras
+    recipes:
+      - { name: printable (6+), args: '-n 6 {file}' }
+      - { name: long only (10+), args: '-n 10 {file}' }
 
   - name: radare2
     categories: [reversing, pwn]
@@ -202,6 +244,10 @@ tools:
     run_cmd: radare2
     args_hint: "-v"
     sandbox: optional
+    recipes:
+      - { name: analyze, args: '-A {file}' }
+      - { name: all strings, args: '-qc izz {file}' }
+      - { name: debug (runs the binary), args: '-d {file}' }
 
   - name: upx
     categories: [reversing]
@@ -210,6 +256,10 @@ tools:
     scoop: upx
     run_cmd: upx
     args_hint: "-V"
+    recipes:
+      - { name: unpack, args: '-d -o {out}\unpacked.exe {file}' }
+      - { name: test, args: '-t {file}' }
+      - { name: list, args: '-l {file}' }
 
   - name: jadx
     categories: [mobile, reversing]
@@ -303,6 +353,11 @@ tools:
     pipx: volatility3
     run_cmd: vol
     args_hint: "-f memory.dmp windows.info"
+    recipes:
+      - { name: system info, args: '-f {file} windows.info' }
+      - { name: processes, args: '-f {file} windows.pslist' }
+      - { name: command lines, args: '-f {file} windows.cmdline' }
+      - { name: files, args: '-f {file} windows.filescan' }
 
   - name: ropper
     categories: [pwn, reversing]
@@ -447,6 +502,10 @@ tools:
     run_cmd: john
     args_hint: '--wordlist="{app:seclists-lite}\xato-net-10-million-passwords-10000.txt" hashes.txt'
     note: official Openwall Windows build (1.9.0-jumbo-1, 2019); zip2john, rar2john, keepass2john etc. are on PATH too
+    recipes:
+      - { name: wordlist, args: '--wordlist="{app:seclists-lite}\xato-net-10-million-passwords-10000.txt" {file}' }
+      - { name: single crack, args: '--single {file}' }
+      - { name: show cracked, args: '--show {file}' }
 
   - name: steghide
     categories: [stego, forensics]
@@ -457,6 +516,9 @@ tools:
     run_cmd: steghide
     args_hint: "info image.jpg"
     note: legacy 2003 Win32 build - still the reference steghide; extract with -sf image.jpg -p <passphrase>
+    recipes:
+      - { name: info, args: 'info {file}' }
+      - { name: extract, empty passphrase, args: 'extract -sf {file} -p "" -xf {out}\steghide.out' }
 
   - name: nikto
     categories: [web, network]
@@ -466,6 +528,8 @@ tools:
     bucket: winsploit
     run_cmd: nikto
     args_hint: "-h https://example.com"
+    recipes:
+      - { name: scan, args: '-h {target}' }
 
   - name: seclists-lite
     categories: [wordlists, passwords, web]

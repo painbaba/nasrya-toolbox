@@ -37,6 +37,8 @@ pub struct Info {
     pub target: String,
     /// Extra flag prefix for this event, e.g. `ACME` for `ACME{...}`.
     pub flag_format: String,
+    /// Wordlist for `{wordlist}` in recipes, when not the default.
+    pub wordlist: String,
     pub created: String,
 }
 
@@ -88,6 +90,30 @@ impl Workspace {
     pub fn notes_path(&self) -> PathBuf {
         self.dir.join("notes.md")
     }
+    /// Where recipes point tools' own output files (`{out}`).
+    pub fn out_dir(&self) -> PathBuf {
+        self.dir.join("out")
+    }
+
+    /// Challenge files, newest first, as full paths.
+    pub fn files_newest_first(&self) -> Vec<PathBuf> {
+        let mut v: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(self.files_dir())
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.is_file())
+                    .map(|p| {
+                        let t = std::fs::metadata(&p)
+                            .and_then(|m| m.modified())
+                            .unwrap_or(std::time::UNIX_EPOCH);
+                        (t, p)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+        v.into_iter().map(|(_, p)| p).collect()
+    }
 
     /// "picoCTF 2026 / rev crackme1"
     pub fn title(&self) -> String {
@@ -118,6 +144,7 @@ impl Workspace {
                 target: target.trim().to_string(),
                 flag_format: flag_prefix(flag),
                 created: crate::runlog::stamp_iso_now(),
+                ..Default::default()
             },
         };
         ws.save()?;

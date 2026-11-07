@@ -171,6 +171,8 @@ pub enum Mode {
     SandboxInput,
     /// creating or editing a challenge, one field at a time
     Challenge(ChallengeField),
+    /// a value a recipe needs that isn't known yet (target, file, wordlist)
+    Recipe(crate::recipe::Slot),
 }
 
 /// The fields the challenge prompts ask for, in wizard order.
@@ -395,6 +397,14 @@ pub struct App {
     /// field being edited on the active one.
     challenge_draft: workspace::Info,
     challenge_new: bool,
+    /// The recipe picker (Enter on a tool with recipes): the highlighted
+    /// row; the last row is "custom".
+    pub recipe_view: Option<usize>,
+    /// The recipe being filled in (index into the selected tool's recipes).
+    pending_recipe: Option<usize>,
+    /// Values given without an active challenge, and the file picked when
+    /// a challenge has several.
+    adhoc: crate::recipe::Values,
     /// Corner notifications, oldest first.
     pub toasts: Vec<Toast>,
     /// Step of the first-run welcome tour, while it's open.
@@ -494,6 +504,9 @@ impl App {
             ctf_root: workspace::root(),
             challenge_draft: workspace::Info::default(),
             challenge_new: false,
+            recipe_view: None,
+            pending_recipe: None,
+            adhoc: crate::recipe::Values::default(),
             toasts: Vec::new(),
             tour: None,
             mono: crate::theme::no_color(),
@@ -806,6 +819,7 @@ impl App {
             }
         }
         self.challenge = ws;
+        self.adhoc.file = None;
         self.challenge_list = workspace::list(&self.ctf_root);
     }
 
@@ -983,6 +997,186 @@ impl App {
             Ok(()) => format!("saved: {} · target {}", ws.title(), ws.info.target),
             Err(e) => format!("couldn't save challenge.yaml: {e}"),
         };
+    }
+
+    // -------------------------------------------------------------- recipes
+
+    /// SecLists-lite's common.txt, when it's installed.
+    fn default_wordlist() -> Option<String> {
+        let p = scoop::scoop_root()?
+            .join("apps")
+            .join("seclists-lite")
+            .join("current")
+            .join("common.txt");
+        p.is_file().then(|| p.display().to_string())
+    }
+
+    /// What the placeholders mean right now. With `make_out`, the `{out}`
+    /// folder is created (only when a recipe is really being used).
+    pub fn recipe_values(&self, make_out: bool) -> crate::recipe::Values {
+        let ws = self.challenge.as_ref();
+        let nonempty = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
+        let target = ws
+            .and_then(|w| nonempty(&w.info.target))
+            .or_else(|| self.adhoc.target.clone());
+        // one challenge file: that one; several: the one picked this session
+        let file = match ws.map(Workspace::files_newest_first) {
+            Some(f) if f.len() == 1 => Some(f[0].display().to_string()),
+            Some(f) if f.len() > 1 => self
+                .adhoc
+                .file
+                .clone()
+                .filter(|p| f.iter().any(|x| x.display().to_string() == *p)),
+            _ => self.adhoc.file.clone(),
+        };
+        let out_dir = match ws {
+            Some(w) => w.out_dir(),
+            None => crate::runlog::log_dir()
+                .parent()
+                .map(|p| p.join("out"))
+                .unwrap_or_else(std::env::temp_dir),
+        };
+        if make_out {
+            let _ = std::fs::create_dir_all(&out_dir);
+        }
+        let wordlist = ws
+            .and_then(|w| nonempty(&w.info.wordlist))
+            .or_else(|| self.adhoc.wordlist.clone())
+            .or_else(Self::default_wordlist);
+        crate::recipe::Values {
+            target,
+            file,
+            out: Some(out_dir.display().to_string()),
+            wordlist,
+        }
+    }
+
+    /// Keys while the recipe picker is open.
+    fn on_key_recipes(&mut self, code: KeyCode) {
+        let Some(cur) = self.recipe_view else {
+            return;
+        };
+        let n = self.tools[self.selected].recipes.len() + 1; // + custom
+        match code {
+            KeyCode::Up | KeyCode::Char('k') => self.recipe_view = Some(cur.saturating_sub(1)),
+            KeyCode::Down | KeyCode::Char('j') => self.recipe_view = Some((cur + 1).min(n - 1)),
+            KeyCode::Enter => {
+                self.recipe_view = None;
+                if cur + 1 == n {
+                    self.open_args_prompt();
+                } else {
+                    self.pending_recipe = Some(cur);
+                    self.continue_recipe();
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => self.recipe_view = None,
+            _ => {}
+        }
+    }
+
+    /// The args prompt with the tool's example args (no recipe).
+    fn open_args_prompt(&mut self) {
+        let hint = self.tools[self.selected].args_hint.clone();
+        self.editor.set(&hint.unwrap_or_default());
+        self.history.reset();
+        self.mode = Mode::Input;
+    }
+
+    /// Fill the pending recipe: ask for the first missing value, or open
+    /// the args prompt with everything filled in.
+    fn continue_recipe(&mut self) {
+        use crate::recipe::{fill, Slot};
+        let Some(idx) = self.pending_recipe else {
+            return;
+        };
+        let Some(r) = self.tools[self.selected].recipes.get(idx).cloned() else {
+            self.pending_recipe = None;
+            return;
+        };
+        match fill(&r.args, &self.recipe_values(true)) {
+            Ok(args) => {
+                self.pending_recipe = None;
+                self.editor.set(&args);
+                self.history.reset();
+                self.mode = Mode::Input;
+                self.status_line = format!("recipe {} · check it, then Enter runs it", r.name);
+            }
+            Err(missing) => {
+                let slot = missing[0];
+                let prefill = match slot {
+                    // several challenge files: offer the newest
+                    Slot::File => self
+                        .challenge
+                        .as_ref()
+                        .and_then(|w| w.files_newest_first().first().cloned())
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default(),
+                    _ => String::new(),
+                };
+                self.editor.set(&prefill);
+                self.history.reset();
+                self.mode = Mode::Recipe(slot);
+                self.status_line = format!("the {} recipe needs a {}", r.name, slot.name());
+            }
+        }
+    }
+
+    /// Enter in a recipe value prompt: keep the value (in the challenge
+    /// when there is one), then carry on filling the recipe.
+    fn recipe_value(&mut self, slot: crate::recipe::Slot, text: String) {
+        use crate::recipe::Slot;
+        let text = text.trim().trim_matches('"').trim().to_string();
+        if text.is_empty() {
+            self.status_line = format!("the recipe needs a {}", slot.name());
+            self.editor.set("");
+            self.mode = Mode::Recipe(slot);
+            return;
+        }
+        match slot {
+            Slot::Target => match self.challenge.as_mut() {
+                Some(ws) => {
+                    ws.info.target = text;
+                    let _ = ws.save();
+                }
+                None => self.adhoc.target = Some(text),
+            },
+            Slot::Wordlist => match self.challenge.as_mut() {
+                Some(ws) => {
+                    ws.info.wordlist = text;
+                    let _ = ws.save();
+                }
+                None => self.adhoc.wordlist = Some(text),
+            },
+            Slot::File => {
+                let src = PathBuf::from(&text);
+                let inside = self
+                    .challenge
+                    .as_ref()
+                    .is_some_and(|w| src.starts_with(w.files_dir()));
+                // a file from elsewhere is copied into the challenge first
+                let used = match self.challenge.as_ref() {
+                    Some(ws) if !inside && src.is_file() => match ws.add_file(&src) {
+                        Ok(dest) => {
+                            self.console.push(format!(
+                                ":: copied {} -> {}",
+                                src.display(),
+                                dest.display()
+                            ));
+                            dest
+                        }
+                        Err(e) => {
+                            self.status_line = format!("not added: {e:#}");
+                            self.pending_recipe = None;
+                            return;
+                        }
+                    },
+                    _ => src,
+                };
+                self.adhoc.file = Some(used.display().to_string());
+            }
+            Slot::Out => {}
+        }
+        self.continue_recipe();
     }
 
     // ----------------------------------------------------------------- tour
@@ -1729,6 +1923,10 @@ impl App {
             self.on_key_challenges(key.code);
             return;
         }
+        if self.recipe_view.is_some() {
+            self.on_key_recipes(key.code);
+            return;
+        }
         if self.provider_pick.is_some() {
             self.on_key_provider(key.code);
             return;
@@ -1820,6 +2018,8 @@ impl App {
             "\u{0}stdin".to_string()
         } else if self.mode == Mode::Search {
             "\u{0}search".to_string()
+        } else if matches!(self.mode, Mode::Recipe(_)) {
+            "\u{0}recipe".to_string()
         } else if matches!(self.mode, Mode::Challenge(_)) {
             "\u{0}challenge".to_string()
         } else if self.mode == Mode::SandboxInput {
@@ -1933,11 +2133,10 @@ impl App {
                         slot: None,
                     };
                     self.apply(run, Source::Terminal);
+                } else if !self.tools[self.selected].recipes.is_empty() {
+                    self.recipe_view = Some(0);
                 } else {
-                    let hint = self.tools[self.selected].args_hint.clone();
-                    self.editor.set(&hint.unwrap_or_default());
-                    self.history.reset();
-                    self.mode = Mode::Input;
+                    self.open_args_prompt();
                 }
             }
             _ => {}
@@ -1982,6 +2181,7 @@ impl App {
                 self.mode = Mode::Browsing;
                 self.editor.set("");
                 self.history.reset();
+                self.pending_recipe = None;
             }
             KeyCode::Enter if self.mode == Mode::Filter => {
                 // keep the filter, back to the list
@@ -2009,6 +2209,7 @@ impl App {
                     Mode::HashInput => self.apply(Action::HashId(text), Source::Terminal),
                     Mode::SandboxInput => self.launch_sandboxed(&text),
                     Mode::Challenge(field) => self.challenge_step(field, text),
+                    Mode::Recipe(slot) => self.recipe_value(slot, text),
                     Mode::StdinInput => {
                         self.apply(Action::Stdin(self.focus, text), Source::Terminal)
                     }
@@ -2689,6 +2890,26 @@ impl App {
                 (!h.is_empty()).then_some((t.name.as_str(), h))
             })
             .collect();
+        // each tool's recipes, filled from the active challenge ({gaps} left)
+        let v = self.recipe_values(false);
+        let recipes: serde_json::Map<String, serde_json::Value> = self
+            .tools
+            .iter()
+            .filter(|t| !t.recipes.is_empty())
+            .map(|t| {
+                let list: Vec<serde_json::Value> = t
+                    .recipes
+                    .iter()
+                    .map(|r| {
+                        serde_json::json!({
+                            "name": r.name,
+                            "args": crate::recipe::fill_partial(&r.args, &v),
+                        })
+                    })
+                    .collect();
+                (t.name.clone(), serde_json::Value::Array(list))
+            })
+            .collect();
         serde_json::json!({
             "status": status,
             "conflicts": conflicts,
@@ -2705,6 +2926,7 @@ impl App {
                 "flag_format": w.info.flag_format,
                 "files": w.files(),
             })),
+            "recipes": recipes,
             "challenges": self
                 .challenge_list
                 .iter()
@@ -3293,6 +3515,68 @@ mod tests {
         a.on_key(big_c);
         a.on_key(key(KeyCode::Char('x')));
         assert!(a.challenge.is_none());
+    }
+
+    #[test]
+    fn recipes_ask_for_what_they_need_then_fill_the_prompt() {
+        let root = std::env::temp_dir()
+            .join("winsploit-app-tests")
+            .join("recipes");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut a = app();
+        a.ctf_root = root.clone();
+        let ws = Workspace::create(&root, "pico", "rev 1", "", "").unwrap();
+        a.challenge = Some(ws.clone());
+        a.selected = a.tools.iter().position(|t| t.name == "nmap").unwrap();
+        a.status[a.selected] = ToolStatus::Installed;
+        a.cat = 0;
+        // Enter opens the picker; the first recipe needs a target
+        a.on_key(key(KeyCode::Enter));
+        assert_eq!(a.recipe_view, Some(0));
+        a.on_key(key(KeyCode::Enter));
+        assert_eq!(a.mode, Mode::Recipe(crate::recipe::Slot::Target));
+        type_line(&mut a, "10.10.10.3");
+        // saved into the challenge, and the prompt is filled
+        assert_eq!(
+            Workspace::open(&root, &ws.id).unwrap().info.target,
+            "10.10.10.3"
+        );
+        assert_eq!(a.mode, Mode::Input);
+        assert!(
+            a.editor.text().contains("\"10.10.10.3\""),
+            "{}",
+            a.editor.text()
+        );
+        a.on_key(key(KeyCode::Esc));
+        // a {file} recipe with a file from outside: copied into the challenge
+        let sample = root.join("crack me.bin");
+        std::fs::write(&sample, b"MZ").unwrap();
+        a.selected = a.tools.iter().position(|t| t.name == "strings").unwrap();
+        a.status[a.selected] = ToolStatus::Installed;
+        a.on_key(key(KeyCode::Enter));
+        a.on_key(key(KeyCode::Enter));
+        assert_eq!(a.mode, Mode::Recipe(crate::recipe::Slot::File));
+        type_line(&mut a, &sample.display().to_string());
+        let copied = ws.files_dir().join("crack me.bin");
+        assert!(copied.is_file());
+        assert_eq!(a.mode, Mode::Input);
+        let argv = crate::args::split(&a.editor.text()).unwrap();
+        assert!(argv.contains(&copied.display().to_string()), "{argv:?}");
+        a.on_key(key(KeyCode::Esc));
+        // the last row is "custom": the plain example args
+        a.on_key(key(KeyCode::Enter));
+        let n = a.tools[a.selected].recipes.len();
+        for _ in 0..n {
+            a.on_key(key(KeyCode::Down));
+        }
+        a.on_key(key(KeyCode::Enter));
+        assert_eq!(a.mode, Mode::Input);
+        assert_eq!(
+            a.editor.text(),
+            a.tools[a.selected].args_hint.clone().unwrap_or_default()
+        );
+        // the browser gets the recipes filled in
+        assert!(a.web_state_json().contains("\"recipes\""));
     }
 
     #[test]

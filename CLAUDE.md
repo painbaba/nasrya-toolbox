@@ -56,6 +56,13 @@ or ASCII) and a border set. Don't hardcode colors or glyphs in ui.rs. Two invari
 - ASCII glyph mode must not emit box-drawing chars or symbol icons (a test checks this). Gate fancy glyphs
   on `th.glyph.icons` or put them in `Glyphs`.
 
+**CTF layer.** `workspace.rs` (challenge folders under `%USERPROFILE%\ctf`, ids `<event>/<challenge>`
+that only resolve to scanned folders), `recipe.rs` (placeholders `{target}` `{file}` `{out}`
+`{wordlist}`, written unquoted, each filled as one quoted argument) and `flags.rs` (flag
+scanner). Logs and flags follow the active challenge (`App::logs_dir`, `App::flags_path`).
+Tests must not touch the real clipboard, `%APPDATA%` or `%USERPROFILE%\ctf`: use a temp
+`ctf_root`, and `cfg!(test)` guards like `catch_flags` / `set_challenge`.
+
 **The catalog (`tools.yaml`) is the extension point.** Adding a tool needs no code. registry.rs
 parses it, folds the legacy `category:` into `categories:` (primary first), expands placeholders
 (`{scoop_app}`, `{app:NAME}`), and reports every validation problem at once. `launch:` (stream / gui

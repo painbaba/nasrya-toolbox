@@ -73,6 +73,8 @@ pub fn render(f: &mut Frame, app: &App) {
         render_flags(f, app, cur, &th, area);
     } else if let Some(cur) = app.challenge_view {
         render_challenges(f, app, cur, &th, area);
+    } else if let Some(cur) = app.recipe_view {
+        render_recipes(f, app, cur, &th, area);
     } else if app.show_help {
         render_help(f, &th, area);
     } else if let Some(cur) = app.lan_panel {
@@ -97,7 +99,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("/", "filter tools by name / category / description"),
     (
         "Enter",
-        "run the tool in a free terminal (edit args first) · dataset: list it",
+        "run the tool: pick a recipe (if it has some), edit the args, run · dataset: list it",
     ),
     (
         "0-4  Tab",
@@ -1467,9 +1469,19 @@ fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         | Mode::Filter
         | Mode::Search
         | Mode::SandboxInput
-        | Mode::Challenge(_) => {
+        | Mode::Challenge(_)
+        | Mode::Recipe(_) => {
             let net_help;
             let (name, help) = match app.mode {
+                Mode::Recipe(crate::recipe::Slot::Target) => (
+                    "target",
+                    "  IP, host, URL or nc host port · saved in the challenge · Enter · Esc cancel",
+                ),
+                Mode::Recipe(crate::recipe::Slot::File) => (
+                    "file",
+                    "  the challenge file to use (copied into the challenge) · Enter · Esc cancel",
+                ),
+                Mode::Recipe(_) => ("wordlist", "  path to the wordlist · Enter · Esc cancel"),
                 Mode::Challenge(ChallengeField::Event) => {
                     ("event", "  e.g. picoCTF 2026 · Enter next · Esc cancel")
                 }
@@ -1652,6 +1664,76 @@ fn render_toasts(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             r,
         );
     }
+}
+
+/// The recipe picker: the selected tool's recipes, filled with what's
+/// known; missing values show as `{target}` gaps (asked for on Enter).
+fn render_recipes(f: &mut Frame, app: &App, cur: usize, th: &Theme, area: Rect) {
+    let p = &th.pal;
+    let g = th.glyph;
+    let t = &app.tools[app.selected];
+    let v = app.recipe_values(false);
+    let name_w = t
+        .recipes
+        .iter()
+        .map(|r| r.name.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(6);
+    let n = t.recipes.len() + 1;
+    let mut lines: Vec<Line> = Vec::new();
+    for row in 0..n {
+        let on = row == cur.min(n - 1);
+        let (name, args, gaps) = match t.recipes.get(row) {
+            Some(r) => {
+                let missing = crate::recipe::fill(&r.args, &v).err().unwrap_or_default();
+                (
+                    r.name.clone(),
+                    crate::recipe::fill_partial(&r.args, &v),
+                    missing,
+                )
+            }
+            None => (
+                "custom".to_string(),
+                t.args_hint.clone().unwrap_or_default(),
+                vec![],
+            ),
+        };
+        // a preview: the challenge folder shortens to … (the prompt gets
+        // the full path)
+        let args = match &app.challenge {
+            Some(w) => args.replace(&w.dir.display().to_string(), "…"),
+            None => args,
+        };
+        let mut spans = vec![
+            Span::styled(if on { g.pointer } else { "  " }, th.fg(p.accent)),
+            Span::styled(
+                format!("{name:<name_w$}"),
+                if on { th.selected() } else { th.strong(p.fg) },
+            ),
+            Span::styled(format!("  {args}"), th.fg(p.dim)),
+        ];
+        if !gaps.is_empty() {
+            let names: Vec<&str> = gaps.iter().map(|s| s.name()).collect();
+            spans.push(Span::styled(
+                format!("  asks for {}", names.join(", ")),
+                th.fg(p.warn),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+    let w = lines.iter().map(|l| l.width()).max().unwrap_or(40) as u16 + 4;
+    let h = lines.len() as u16 + 2;
+    let popup = overlay_area(f, th, area, w.max(50), h);
+    let title = format!("{} · recipes", t.name);
+    f.render_widget(
+        Paragraph::new(lines).block(overlay_block(
+            th,
+            &title,
+            "↑↓ choose · Enter fill & edit · Esc",
+        )),
+        popup,
+    );
 }
 
 /// The `C` overlay: every challenge under the root, the active one marked.
@@ -2282,6 +2364,19 @@ mod tests {
             "{underlined}"
         );
         assert!(!underlined.contains("tail"));
+    }
+
+    #[test]
+    fn recipe_picker_shows_filled_args_and_gaps() {
+        let mut a = app();
+        a.selected = a.tools.iter().position(|t| t.name == "nmap").unwrap();
+        a.recipe_view = Some(0);
+        let sc = screen(&draw(&a, 160, 30), 30);
+        assert!(
+            sc.contains("nmap · recipes") && sc.contains("custom"),
+            "{sc}"
+        );
+        assert!(sc.contains("asks for target"), "{sc}");
     }
 
     #[test]

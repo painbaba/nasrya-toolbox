@@ -116,6 +116,15 @@ Pick a tool with `↑/↓` (or `/` to filter), press `i` to install it and `Ente
 - **PATH changes picked up live** after an install, with no restart needed.
 - Detection runs **in-process and off the UI thread**, so the dashboard never freezes.
 
+### 🏁 Built for CTFs
+- **Challenge workspaces** (`C`). One folder per challenge under `%USERPROFILE%\ctf\<event>\<challenge>`
+  with its target, flag format, files, notes, run logs and flags. The header shows what you're on.
+- **Recipes**. Enter on nmap, ffuf, john, upx, volatility3 and a dozen more offers ready-made
+  commands (`quick`, `full`, `udp`, `unpack`…) with the challenge's `{target}`, `{file}`, `{out}`
+  folder and `{wordlist}` filled in. Anything missing is asked for once and remembered.
+- **Flag catcher**. `picoCTF{…}`, `HTB{…}`, `flag{…}` and the event's own format are highlighted
+  in any output, announced, copied to the clipboard, saved to `flags.txt` and listed under `F`.
+
 ### 🧠 Built-in helpers
 - **Hash identifier** (`h` in the dashboard, or `winsploit hashid <hash>`). Works offline, knows
   37 hash formats, and gives the matching **`hashcat -m`** mode and **`john --format`** name.
@@ -207,6 +216,8 @@ winsploit --version, -V   show version
 | `f` · `n` · `N` | Find in output · older match · newer match |
 | `c` | Cancel the running process (kills the whole tree) |
 | `h` | Identify a hash (built in, offline) |
+| `C` | Challenges: create, switch, set the target / flag format, add files, open notes |
+| `F` | Flags caught in tool output (`Enter` copies one) |
 | `S` | Run the selected tool in Windows Sandbox (see below) · `Tab` in the prompt = network on/off |
 | `t` | Appearance: theme, borders, glyphs, overlays (live preview) |
 | `w` · `W` · `o` | Web view: start / stop · serve your LAN · open it in the browser |
@@ -263,6 +274,39 @@ The args and hash prompts are real line editors:
 
 Backslashes are literal (no need to double them) and `\"` is a literal quote. A quoted path can't
 end in a backslash, so write `"C:\dir"`, not `"C:\dir\"`.
+
+### Challenges, recipes and flags
+
+Press **`C`**, then **`n`**: give the event and challenge a name, the target (IP, host, URL or
+`nc host port`) and, if the event uses its own format, the flag prefix (`ACME{`). Winsploit makes
+
+```text
+%USERPROFILE%\ctf\picoCTF-2026\rev-crackme1\
+    challenge.yaml   files\   logs\   out\   flags.txt   notes.md
+```
+
+and, while it's active, every run log, flag and recipe output goes there. In the `C` picker,
+`Enter` switches, `t` / `l` change the target / flag format, `f` copies a file in (the original
+is left alone), `m` opens the notes, `o` the folder and `x` leaves the challenge. The web view
+shows the active challenge and can switch between existing ones.
+
+**Recipes.** `Enter` on a tool with recipes shows them already filled in; pick one, check the
+arguments, `Enter` runs it. Placeholders in `tools.yaml` (write them unquoted):
+
+| Placeholder | Becomes |
+|---|---|
+| `{target}` | the challenge's target (asked for once, then saved in the challenge) |
+| `{file}` | the challenge file (asked for when there are several; files from elsewhere are copied in) |
+| `{out}` | the challenge's `out\` folder, for files tools write (`nmap -oN`, `upx -o`…) |
+| `{wordlist}` | SecLists-lite `common.txt`, or the challenge's own wordlist |
+
+Each value becomes exactly one argument, so a path with spaces stays whole and a target can never
+smuggle in extra flags.
+
+**Flags.** Known prefixes (`flag`, `CTF`, `HTB`, `THM`, `picoCTF`, `DUCTF`…) and the challenge's
+own format are trusted; other `WORD{…}` that look like flags are marked *likely*. Each new one is
+highlighted, copied to the clipboard and appended to `flags.txt` (the challenge's, or
+`%LOCALAPPDATA%\winsploit\flags.txt`). `F` lists them and the web view has a Flags panel.
 
 ### Sandbox (reversing & pwn)
 
@@ -472,6 +516,9 @@ flowchart LR
 | `web.rs` · `web/` | Web view: local HTTP server, event stream, sign-in, LAN guests and join keys, and the embedded pages |
 | `tls.rs` | The LAN view's self-signed certificate: create / load / renew, SHA-256 fingerprint |
 | `sandbox.rs` | Windows Sandbox runs: locate the tool, safety checks, `.wsb` generation |
+| `workspace.rs` | Challenge folders: create, open, list, add files, remember the active one |
+| `recipe.rs` | Recipe placeholders: validation and filling (one quoted argument per value) |
+| `flags.rs` | Flag catcher: finds flags in output lines (character positions for highlighting) |
 | `ui.rs` · `banner.rs` | Dashboard rendering, ASCII splash and wordmark |
 | `bucket_tests.rs` | Validates every manifest in `bucket/` against the catalog |
 

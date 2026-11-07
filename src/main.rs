@@ -18,6 +18,7 @@ mod envpath;
 mod flags;
 mod hashid;
 mod install;
+mod recipe;
 mod registry;
 mod runlog;
 mod runner;
