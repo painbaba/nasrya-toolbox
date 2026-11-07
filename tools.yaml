@@ -166,3 +166,20 @@ tools:
     scoop: upx
     run_cmd: upx
     args_hint: "-V"
+
+  - name: jadx
+    category: reversing
+    description: Android DEX to Java decompiler (needs a JDK)
+    exe: jadx
+    scoop: jadx
+    run_cmd: jadx
+    args_hint: "--version"
+    bucket: extras
+
+  - name: apktool
+    category: reversing
+    description: Decode / rebuild Android APK resources (needs a JRE)
+    exe: apktool
+    scoop: apktool
+    run_cmd: apktool
+    args_hint: "--version"
