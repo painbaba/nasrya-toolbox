@@ -16,6 +16,9 @@
   terminal template at the bottom.
 -->
 <header class="topbar">
+  <button type="button" class="icon-btn" id="toggle-sidebar" title="Hide the tool list (b)" aria-label="Show or hide the tool list" aria-controls="sidebar" aria-expanded="true">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg>
+  </button>
   <div class="brand">
     <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M7 10l3.2 12 3-8 2.8 8 3.2-12"/><circle cx="24" cy="21" r="2.2"/></svg>
     <span class="name">winsploit</span>
@@ -48,6 +51,9 @@
   <button type="button" class="icon-btn" id="notify-toggle" title="Desktop notifications: off" aria-label="Desktop notifications">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>
   </button>
+  <button type="button" class="icon-btn" id="open-settings" title="Settings (,)" aria-label="Settings">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+  </button>
   <button type="button" class="icon-btn" id="open-help" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 17h.01"/></svg>
   </button>
@@ -59,19 +65,41 @@
 </header>
 
 <div class="layout">
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar">
     <div class="search">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
       <input id="filter" type="search" placeholder="Filter tools" autocomplete="off" spellcheck="false" aria-label="Filter tools">
       <kbd>/</kbd>
     </div>
-    <nav class="cats" id="cats" aria-label="Categories"></nav>
-    <p class="cat-blurb" id="cat-blurb"></p>
+    <div class="cats-wrap" id="cats-wrap">
+      <button type="button" class="cats-arrow prev" id="cats-prev" tabindex="-1" aria-label="Scroll categories left" hidden><svg viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></svg></button>
+      <nav class="cats" id="cats" aria-label="Categories"></nav>
+      <button type="button" class="cats-arrow next" id="cats-next" tabindex="-1" aria-label="Scroll categories right" hidden><svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></button>
+    </div>
+    <div class="cat-row">
+      <p class="cat-blurb" id="cat-blurb"></p>
+      <button type="button" class="cats-more" id="cats-more" aria-controls="cats" aria-expanded="false" hidden></button>
+    </div>
+    <div class="list-bar" id="list-bar">
+      <span class="list-count" id="list-count"></span>
+      <div class="spacer"></div>
+      <button type="button" class="icon-btn sm" id="toggle-desc" title="Hide descriptions: one line per tool" aria-label="Show or hide descriptions" aria-pressed="true">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 10h10M4 15h16M4 19h10"/></svg>
+      </button>
+      <button type="button" class="icon-btn sm grouped-only" id="collapse-all" title="Collapse every category" aria-label="Collapse every category">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 20 5-5 5 5M7 4l5 5 5-5"/></svg>
+      </button>
+      <button type="button" class="icon-btn sm grouped-only" id="expand-all" title="Expand every category" aria-label="Expand every category">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 5 5 5-5M7 9l5-5 5 5"/></svg>
+      </button>
+    </div>
     <div class="tools" id="tools" role="listbox" aria-label="Tools"></div>
+    <div class="splitter y" id="split-flags" role="separator" aria-orientation="horizontal" aria-label="Resize the flags list" tabindex="0" hidden></div>
     <section class="flags" id="flags" aria-label="Flags" hidden>
       <h2>Flags <span id="flag-count"></span></h2>
       <ul id="flag-list"></ul>
     </section>
+    <div class="splitter x" id="split-side" role="separator" aria-orientation="vertical" aria-label="Resize the tool list (double-click resets)" tabindex="0"></div>
   </aside>
 
   <main class="main">
@@ -90,18 +118,31 @@
         <select id="recipe" class="recipe-pick" aria-label="Recipe" title="Recipes fill the arguments from the active challenge" hidden></select>
         <label class="args" id="args-wrap">
           <span class="prompt" id="t-cmd">$</span>
-          <input id="args" list="args-history" spellcheck="false" placeholder="arguments" aria-label="Arguments">
-          <datalist id="args-history"></datalist>
+          <input id="args" spellcheck="false" placeholder="arguments" aria-label="Arguments"
+            role="combobox" aria-autocomplete="list" aria-controls="suggest" aria-expanded="false">
+          <kbd class="args-kbd" title="Suggestions: Ctrl+Space, or start typing a flag">Ctrl+Space</kbd>
         </label>
         <button type="submit" class="btn primary" id="run-btn" data-action="run">Run</button>
         <button type="button" class="btn" id="install-btn" data-action="install" hidden>Install</button>
+        <div class="suggest" id="suggest" role="listbox" aria-label="Suggestions" hidden>
+          <div class="suggest-head" id="suggest-head"></div>
+          <div class="suggest-list" id="suggest-list"></div>
+          <div class="suggest-foot"><span><kbd>Tab</kbd> insert</span><span><kbd>↑</kbd><kbd>↓</kbd> choose, <kbd>Enter</kbd> insert it</span><span><kbd>Esc</kbd> close</span></div>
+        </div>
       </form>
+      <div class="explain" id="args-explain" aria-live="polite"></div>
       <p class="hint" id="args-hint"></p>
     </section>
 
+    <div class="splitter y" id="split-card" role="separator" aria-orientation="horizontal" aria-label="Resize the tool card and the terminals (double-click resets)" tabindex="0"></div>
+
     <section class="terminals" aria-label="Terminals">
       <div class="term-tabs" role="tablist" id="term-tabs"></div>
-      <div class="term-body" id="term-body"></div>
+      <div class="term-wrap">
+        <div class="term-body" id="term-body"></div>
+        <div class="splitter x grid-split" id="split-gx" role="separator" aria-orientation="vertical" aria-label="Resize the grid columns" tabindex="0" hidden></div>
+        <div class="splitter y grid-split" id="split-gy" role="separator" aria-orientation="horizontal" aria-label="Resize the grid rows" tabindex="0" hidden></div>
+      </div>
     </section>
   </main>
 </div>
@@ -132,6 +173,9 @@
     <dt><kbd>↑</kbd> <kbd>↓</kbd> <kbd>j</kbd> <kbd>k</kbd></dt><dd>move in the tool list</dd>
     <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>switch category</dd>
     <dt><kbd>Enter</kbd></dt><dd>edit the arguments, then run</dd>
+    <dt><kbd>Ctrl</kbd>+<kbd>Space</kbd> <kbd>Tab</kbd></dt><dd>in the arguments: suggestions (flags, recipes, history, challenge files), insert one</dd>
+    <dt><kbd>b</kbd></dt><dd>show or hide the tool list</dd>
+    <dt><kbd>,</kbd></dt><dd>settings</dd>
     <dt><kbd>0</kbd>–<kbd>4</kbd></dt><dd>show the console or terminal 1–4</dd>
     <dt><kbd>g</kbd></dt><dd>grid: all four terminals at once</dd>
     <dt><kbd>f</kbd></dt><dd>find in the shown terminal (Enter older, Shift+Enter newer)</dd>
@@ -141,6 +185,80 @@
   </dl>
   <p class="muted">Everything here also works from the terminal, and both views stay in sync.</p>
   <div class="dialog-actions"><button type="button" class="btn primary" data-close>Got it</button></div>
+</dialog>
+
+<dialog id="settings-dialog" class="wide settings" aria-labelledby="settings-title">
+  <div class="settings-head">
+    <h2 id="settings-title">Settings</h2>
+    <p>Saved in this browser only. The terminal and other tabs keep their own.</p>
+  </div>
+  <form id="settings-form" class="settings-body" autocomplete="off">
+    <section>
+      <h3>Appearance</h3>
+      <div class="set-row"><span>Theme</span>
+        <div class="seg" role="radiogroup" aria-label="Theme">
+          <label><input type="radio" name="theme" value="auto"><span>Auto</span></label>
+          <label><input type="radio" name="theme" value="light"><span>Light</span></label>
+          <label><input type="radio" name="theme" value="dark"><span>Dark</span></label>
+        </div>
+      </div>
+      <div class="set-row top"><span>Colors</span><div class="palettes" id="palettes" role="radiogroup" aria-label="Color palette"></div></div>
+      <label class="set-row"><span>Colored category titles<small>each category gets its own color in the tool list</small></span><input type="checkbox" class="switch" data-set="catColors"></label>
+      <div class="set-row"><span>Density</span>
+        <div class="seg" role="radiogroup" aria-label="Density">
+          <label><input type="radio" name="density" value="comfortable" data-set="density"><span>Comfortable</span></label>
+          <label><input type="radio" name="density" value="compact" data-set="density"><span>Compact</span></label>
+        </div>
+      </div>
+      <label class="set-row"><span>Text size</span>
+        <select data-set="uiSize" data-num>
+          <option value="13">Small</option><option value="14">Normal</option><option value="15">Large</option><option value="16">Larger</option>
+        </select>
+      </label>
+    </section>
+    <section>
+      <h3>Tool list</h3>
+      <label class="set-row"><span>Descriptions<small>off: one line per tool, much less scrolling</small></span><input type="checkbox" class="switch" data-set="desc"></label>
+      <div class="set-row"><span>Category bar<small>rows can fold to two lines; a single row scrolls sideways</small></span>
+        <div class="seg" role="radiogroup" aria-label="Category bar">
+          <label><input type="radio" name="catsMode" value="wrap" data-set="catsMode"><span>Rows</span></label>
+          <label><input type="radio" name="catsMode" value="scroll" data-set="catsMode"><span>One row</span></label>
+        </div>
+      </div>
+    </section>
+    <section>
+      <h3>Terminals</h3>
+      <label class="set-row"><span>Font size</span>
+        <select data-set="termSize" data-num>
+          <option value="11">11 px</option><option value="12">12 px</option><option value="13">13 px</option><option value="14">14 px</option><option value="15">15 px</option><option value="16">16 px</option>
+        </select>
+      </label>
+      <label class="set-row"><span>Wrap long lines<small>off: scroll sideways instead</small></span><input type="checkbox" class="switch" data-set="wrap"></label>
+      <label class="set-row"><span>Follow new output<small>stay at the bottom while a tool prints</small></span><input type="checkbox" class="switch" data-set="follow"></label>
+      <label class="set-row"><span>Lines kept per terminal<small>the full output is always in the run log</small></span>
+        <select data-set="scrollback" data-num>
+          <option value="1000">1,000</option><option value="5000">5,000</option><option value="20000">20,000</option><option value="50000">50,000</option>
+        </select>
+      </label>
+      <label class="set-row"><span>Ask before closing a running tool</span><input type="checkbox" class="switch" data-set="confirmClose"></label>
+    </section>
+    <section>
+      <h3>Command helper</h3>
+      <label class="set-row"><span>Suggestions while typing<small>flags, recipes, history and challenge files (Ctrl+Space always opens them)</small></span><input type="checkbox" class="switch" data-set="suggest"></label>
+      <label class="set-row"><span>Explain the command<small>what each flag in the line does, under the box</small></span><input type="checkbox" class="switch" data-set="explain"></label>
+    </section>
+    <section>
+      <h3>Layout</h3>
+      <label class="set-row"><span>Show the tool list<small>also <kbd>b</kbd> or the button left of the logo</small></span><input type="checkbox" class="switch" data-set="sidebar"></label>
+      <div class="set-row"><span>Panel sizes<small>drag the edges between panels; double-click one to reset it</small></span><button type="button" class="btn sm" id="reset-layout">Reset sizes</button></div>
+      <label class="set-row"><span>Desktop notifications<small>when a tool finishes while this tab is in the background</small></span><input type="checkbox" class="switch" id="set-notify"></label>
+    </section>
+  </form>
+  <div class="dialog-actions">
+    <button type="button" class="btn ghost danger-soft" id="reset-settings">Reset everything</button>
+    <div class="spacer"></div>
+    <button type="button" class="btn primary" data-close>Done</button>
+  </div>
 </dialog>
 
 <dialog id="guests-dialog" class="wide" aria-labelledby="guests-title">
