@@ -396,26 +396,27 @@ fn render_header(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
     f.render_widget(Paragraph::new(stats), cols[1]);
 }
 
-/// The emoji in front of a category chip (unicode glyph set only).
+/// The monochrome symbol in front of a category chip (unicode glyph set
+/// only): one cell wide, coloured like its label.
 fn cat_icon(tab: &CatTab) -> &'static str {
     match tab {
-        CatTab::All => "★",
+        CatTab::All => "≡",
         CatTab::Installed => "✓",
         CatTab::Cat(id) => match id.as_str() {
-            "osint" => "🔎",
-            "recon" => "📡",
-            "network" => "🔌",
-            "web" => "🌐",
-            "exploit" => "💥",
-            "passwords" => "🔑",
-            "reversing" => "🧩",
-            "pwn" => "💣",
-            "mobile" => "📱",
-            "forensics" => "🔬",
-            "crypto" => "🔐",
-            "stego" => "🎭",
-            "wordlists" => "📚",
-            _ => "📦",
+            "osint" => "◎",
+            "recon" => "⌖",
+            "network" => "⇄",
+            "web" => "⊕",
+            "exploit" => "↯",
+            "passwords" => "⊛",
+            "reversing" => "⟲",
+            "pwn" => "▲",
+            "mobile" => "▯",
+            "forensics" => "⌕",
+            "crypto" => "⌗",
+            "stego" => "◈",
+            "wordlists" => "▤",
+            _ => "◇",
         },
     }
 }
@@ -609,10 +610,10 @@ fn render_tool_list(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         .title_bottom(Line::from(Span::styled(pos, th.fg(p.dim))).alignment(Alignment::Right));
 
     if items.is_empty() {
-        // a friendly face and where to look, instead of an empty box
+        // what happened and where to look, instead of an empty box
         let elsewhere = app.visible_in(&CatTab::All).len();
         let filter = app.filter.trim();
-        let face = if g.icons { "( ˘ ᵕ ˘ )" } else { "(-_-)" };
+        let face = if g.icons { "∅" } else { "(none)" };
         let what = if !filter.is_empty() {
             format!("nothing for \"{filter}\" in {}", tab.label())
         } else if matches!(tab, CatTab::Installed) {

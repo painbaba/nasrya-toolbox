@@ -419,7 +419,7 @@ pub struct Glyphs {
     /// more chips hidden off the edge of the category bar
     pub more_l: &'static str,
     pub more_r: &'static str,
-    /// emoji category icons and the header bolt
+    /// symbol icons on category chips and the header mark
     pub icons: bool,
 }
 

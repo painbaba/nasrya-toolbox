@@ -151,7 +151,7 @@ pub fn wordmark(th: &Theme) -> Line<'static> {
         // accent text, no pill: the solid bar is reserved for the selection
         Span::styled(
             if th.glyph.icons {
-                " ⚡ winsploit"
+                " ◆ winsploit"
             } else {
                 " winsploit"
             },

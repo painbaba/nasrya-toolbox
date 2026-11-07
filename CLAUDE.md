@@ -53,7 +53,7 @@ or ASCII) and a border set. Don't hardcode colors or glyphs in ui.rs. Two invari
 - When `NO_COLOR` is set, crossterm strips *all* colors including backgrounds (`Theme::mono` /
   `App::mono`). Any state shown only by a background color disappears, so use `Theme::selected()` /
   `pill()`, which fall back to reverse video.
-- ASCII glyph mode must not emit box-drawing chars or emoji (a test checks this). Gate fancy glyphs
+- ASCII glyph mode must not emit box-drawing chars or symbol icons (a test checks this). Gate fancy glyphs
   on `th.glyph.icons` or put them in `Glyphs`.
 
 **The catalog (`tools.yaml`) is the extension point.** Adding a tool needs no code. registry.rs
