@@ -8,6 +8,7 @@
 //!   winsploit --help                     show this help
 //!   winsploit --version                  show version
 
+mod agent;
 mod app;
 mod args;
 mod banner;
@@ -243,12 +244,17 @@ fn run_tui(explicit: Option<&Path>, web: WebOpts) -> Result<()> {
     // instead of keystrokes that could trigger key bindings. Best-effort.
     use ratatui::crossterm::{event, execute};
     let _ = execute!(std::io::stdout(), event::EnableBracketedPaste);
+    // Mouse capture: lets the agent icon in the header be clickable. The
+    // trade-off is that the terminal's own click-drag text selection is
+    // suppressed while the dashboard is up (the run log keeps the output).
+    let _ = execute!(std::io::stdout(), event::EnableMouseCapture);
     let mut app = App::new(catalog, path, ignored);
     app.settings = theme::Settings::load();
     app.set_start(web.start);
     app.web_port = web.port;
     app.web_lan = web.lan;
     let result = app.run(&mut terminal);
+    let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
     let _ = execute!(std::io::stdout(), event::DisableBracketedPaste);
     ratatui::restore();
     result

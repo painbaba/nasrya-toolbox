@@ -10,9 +10,14 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
+};
+use ratatui::layout::Rect;
 use ratatui::DefaultTerminal;
 
+use crate::agent;
 use crate::args;
 use crate::banner;
 use crate::detect;
@@ -212,6 +217,23 @@ pub const MAX_TOASTS: usize = 3;
 /// Steps of the first-run welcome tour.
 pub const TOUR_STEPS: usize = 3;
 
+/// The agent overlay: the AI's analysis of the output and a cursor over its
+/// suggested next steps.
+pub struct AgentView {
+    pub analysis: agent::Analysis,
+    /// highlighted suggestion (ignored when there are none)
+    pub cursor: usize,
+}
+
+/// The agent-provider picker (`A`): choose which AI the `a` key uses and set a
+/// model override for it.
+pub struct ProviderPick {
+    /// highlighted row, an index into `agent::Provider::ALL`
+    pub cursor: usize,
+    /// `Some` while typing a model override for the highlighted provider
+    pub editing: Option<LineEditor>,
+}
+
 #[derive(PartialEq, Eq)]
 enum Screen {
     Splash,
@@ -289,6 +311,14 @@ pub struct App {
     pub sandbox_net: bool,
     /// Last sample given to the sandbox prompt, offered again next time.
     sandbox_last: String,
+    /// The agent overlay (the AI's analysis), when open.
+    pub agent: Option<AgentView>,
+    /// The agent-provider picker (`A`), when open.
+    pub provider_pick: Option<ProviderPick>,
+    /// An agent analysis is in flight (icon shows a spinner).
+    pub agent_busy: bool,
+    /// Screen rect of the clickable agent icon, set by the renderer each frame.
+    pub agent_icon: std::cell::Cell<Option<Rect>>,
     /// A background detection pass is in flight.
     detecting: bool,
     /// The console is running a scoop install (so re-detect when it exits).
@@ -360,6 +390,10 @@ impl App {
             mono: crate::theme::no_color(),
             sandbox_net: false,
             sandbox_last: String::new(),
+            agent: None,
+            provider_pick: None,
+            agent_busy: false,
+            agent_icon: std::cell::Cell::new(None),
             detecting: false,
             installing: false,
             screen: Screen::Splash,
@@ -430,6 +464,7 @@ impl App {
                     },
                     // bracketed paste: the whole pasted text arrives at once
                     Event::Paste(text) if self.mode.is_prompt() => self.editor.insert_str(&text),
+                    Event::Mouse(m) if self.screen == Screen::Main => self.on_mouse(m),
                     _ => {}
                 }
             }
@@ -879,6 +914,7 @@ impl App {
             }
             AppEvent::Detected(found) => self.on_detected(found),
             AppEvent::Web(action) => self.on_web_action(action),
+            AppEvent::Agent(res) => self.on_agent_result(res),
         }
     }
 
@@ -968,6 +1004,14 @@ impl App {
             self.on_key_appearance(key.code);
             return;
         }
+        if self.provider_pick.is_some() {
+            self.on_key_provider(key.code);
+            return;
+        }
+        if self.agent.is_some() {
+            self.on_key_agent(key.code);
+            return;
+        }
         if self.show_help {
             // any key closes the overlay
             self.show_help = false;
@@ -1004,7 +1048,7 @@ impl App {
                 }
             }
             KeyCode::Esc | KeyCode::Char('q') => {
-                self.settings = ap.saved;
+                self.settings = ap.saved.clone();
                 self.appearance = None;
             }
             KeyCode::Enter => {
@@ -1098,7 +1142,7 @@ impl App {
             KeyCode::Char('t') => {
                 self.appearance = Some(Appearance {
                     cursor: 0,
-                    saved: self.settings,
+                    saved: self.settings.clone(),
                 })
             }
             KeyCode::Char('f') => {
@@ -1115,6 +1159,17 @@ impl App {
             KeyCode::Char('w') => self.toggle_web(self.web_lan),
             KeyCode::Char('W') => self.toggle_web(true),
             KeyCode::Char('o') => self.start_web(true),
+            KeyCode::Char('a') => self.start_analysis(),
+            KeyCode::Char('A') => {
+                let cursor = agent::Provider::ALL
+                    .iter()
+                    .position(|&p| p == self.settings.agent)
+                    .unwrap_or(0);
+                self.provider_pick = Some(ProviderPick {
+                    cursor,
+                    editing: None,
+                });
+            }
             KeyCode::PageUp => self.focused_mut().map_or((), Session::page_up),
             KeyCode::PageDown => self.focused_mut().map_or((), Session::page_down),
             KeyCode::End => self.focused_mut().map_or((), Session::follow),
@@ -1996,6 +2051,283 @@ impl App {
             Err(e) => self
                 .console
                 .push(format!("[err] failed to start the installer: {e}")),
+        }
+    }
+
+    // ---- agent (`a` key / header icon) --------------------------------
+
+    /// Mouse: a left click on the header agent icon runs it (or closes an open
+    /// overlay); the wheel scrolls the output pane (mouse capture otherwise
+    /// swallows it).
+    fn on_mouse(&mut self, m: MouseEvent) {
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(r) = self.agent_icon.get() {
+                    let hit = m.column >= r.x
+                        && m.column < r.x + r.width
+                        && m.row >= r.y
+                        && m.row < r.y + r.height;
+                    if hit {
+                        if self.agent.is_some() {
+                            self.agent = None;
+                        } else {
+                            self.start_analysis();
+                        }
+                    }
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                if let Some(s) = self.focused_mut() {
+                    let max = s.view.get().1;
+                    s.scroll = (s.scroll + 3).min(max);
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                if let Some(s) = self.focused_mut() {
+                    s.scroll = s.scroll.saturating_sub(3);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Kick off an analysis of the current output with the chosen provider.
+    fn start_analysis(&mut self) {
+        if self.agent_busy {
+            self.status_line = "already analysing the output…".into();
+            return;
+        }
+        let provider = self.settings.agent;
+        match provider.availability() {
+            agent::Availability::Ready => {}
+            agent::Availability::NeedsCli(exe) => {
+                self.console.push(format!(
+                    "[err] {} needs the `{exe}` CLI on PATH. Install it, or press A to pick \
+                     another provider.",
+                    provider.short()
+                ));
+                self.status_line = format!("{} unavailable (press A)", provider.short());
+                return;
+            }
+            agent::Availability::NeedsKey(env) => {
+                self.console.push(format!(
+                    "[err] {} needs the {env} environment variable set. Set it (then restart \
+                     winsploit), or press A to pick another provider.",
+                    provider.short()
+                ));
+                self.status_line = format!("{} needs {env} (press A)", provider.short());
+                return;
+            }
+            agent::Availability::NeedsCurl => {
+                self.console.push("[err] HTTP providers need `curl` on PATH (ships with Windows 10/11).");
+                self.status_line = "curl not found".into();
+                return;
+            }
+        }
+        let tail = self.output_tail(150, 6000);
+        if tail.trim().is_empty() {
+            self.status_line = "no output to analyse yet — run a tool first".into();
+            return;
+        }
+        let ran = self
+            .last_command()
+            .unwrap_or_else(|| "the current session".into());
+        let names: Vec<String> = self.tools.iter().map(|t| t.name.clone()).collect();
+        let model = self.effective_model(provider);
+        self.agent_busy = true;
+        self.status_line = format!("analysing with {} ({model})…", provider.short());
+        agent::analyze(provider, model, names, ran, tail, self.tx.clone());
+    }
+
+    /// The model used for `provider`: the user's override if set, else the
+    /// provider's built-in default.
+    pub fn effective_model(&self, provider: agent::Provider) -> String {
+        self.settings
+            .agent_models
+            .get(provider.short())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| provider.default_model().to_string())
+    }
+
+    /// Keys while the agent-provider picker (`A`) is open.
+    fn on_key_provider(&mut self, code: KeyCode) {
+        let Some(pick) = self.provider_pick.as_mut() else {
+            return;
+        };
+        let n = agent::Provider::ALL.len();
+        let provider = agent::Provider::ALL[pick.cursor];
+
+        // Sub-mode: typing a model override for the highlighted provider.
+        if let Some(ed) = pick.editing.as_mut() {
+            match code {
+                KeyCode::Esc => pick.editing = None,
+                KeyCode::Enter => {
+                    let text = ed.text().trim().to_string();
+                    pick.editing = None;
+                    if text.is_empty() {
+                        self.settings.agent_models.remove(provider.short());
+                    } else {
+                        self.settings
+                            .agent_models
+                            .insert(provider.short().to_string(), text);
+                    }
+                    self.save_settings_status(&format!("{} model set", provider.short()));
+                }
+                KeyCode::Backspace => ed.backspace(),
+                KeyCode::Left => ed.left(),
+                KeyCode::Right => ed.right(),
+                KeyCode::Home => ed.home(),
+                KeyCode::End => ed.end(),
+                KeyCode::Char(c) => ed.insert(c),
+                _ => {}
+            }
+            return;
+        }
+
+        match code {
+            KeyCode::Up | KeyCode::Char('k') => pick.cursor = (pick.cursor + n - 1) % n,
+            KeyCode::Down | KeyCode::Char('j') => pick.cursor = (pick.cursor + 1) % n,
+            KeyCode::Esc | KeyCode::Char('q') => self.provider_pick = None,
+            // m: edit this provider's model; r: reset it to the default
+            KeyCode::Char('m') => {
+                let mut ed = LineEditor::default();
+                ed.set(&self.effective_model(provider));
+                if let Some(pick) = self.provider_pick.as_mut() {
+                    pick.editing = Some(ed);
+                }
+            }
+            KeyCode::Char('r') => {
+                self.settings.agent_models.remove(provider.short());
+                self.save_settings_status(&format!(
+                    "{} model reset to {}",
+                    provider.short(),
+                    provider.default_model()
+                ));
+            }
+            KeyCode::Enter => {
+                self.provider_pick = None;
+                self.settings.agent = provider;
+                self.save_settings_status(&format!(
+                    "agent provider: {} ({})",
+                    provider.short(),
+                    provider.status_note()
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    /// Persist settings and set the status line (or report a save error).
+    fn save_settings_status(&mut self, ok_msg: &str) {
+        match self.settings.save() {
+            Ok(_) => self.status_line = ok_msg.to_string(),
+            Err(e) => {
+                self.status_line = format!("{ok_msg} (not saved)");
+                self.console.push(format!("[err] couldn't save settings: {e}"));
+            }
+        }
+    }
+
+    /// The output of the terminal in front — what the user is looking at.
+    fn visible_output(&self) -> &[String] {
+        match self.focused() {
+            Some(s) => &s.output,
+            None => &self.console.output,
+        }
+    }
+
+    /// The most recent command echoed in the focused terminal (a `$ ` line).
+    fn last_command(&self) -> Option<String> {
+        self.visible_output()
+            .iter()
+            .rev()
+            .find_map(|l| l.strip_prefix("$ ").map(|s| s.to_string()))
+    }
+
+    /// The last `max_lines` of the focused terminal, trimmed to `max_chars`.
+    fn output_tail(&self, max_lines: usize, max_chars: usize) -> String {
+        let out = self.visible_output();
+        let start = out.len().saturating_sub(max_lines);
+        let joined = out[start..].join("\n");
+        let n = joined.chars().count();
+        if n <= max_chars {
+            joined
+        } else {
+            joined.chars().skip(n - max_chars).collect()
+        }
+    }
+
+    fn on_agent_result(&mut self, res: Result<agent::Analysis, String>) {
+        self.agent_busy = false;
+        match res {
+            Ok(a) => {
+                let n = a.suggestions.len();
+                self.status_line = if n > 0 {
+                    format!("agent: {n} suggestion(s) · ↑↓ pick · Enter run · Esc close")
+                } else {
+                    "agent: analysis ready (no tool suggestions)".into()
+                };
+                self.agent = Some(AgentView {
+                    analysis: a,
+                    cursor: 0,
+                });
+            }
+            Err(e) => {
+                self.console.push(format!("[err] agent: {e}"));
+                self.status_line = "agent failed (see output)".into();
+            }
+        }
+    }
+
+    /// Keys while the agent overlay is open.
+    fn on_key_agent(&mut self, code: KeyCode) {
+        let Some(ag) = self.agent.as_mut() else {
+            return;
+        };
+        let n = ag.analysis.suggestions.len();
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('a') => self.agent = None,
+            KeyCode::Up | KeyCode::Char('k') if n > 0 => ag.cursor = (ag.cursor + n - 1) % n,
+            KeyCode::Down | KeyCode::Char('j') if n > 0 => ag.cursor = (ag.cursor + 1) % n,
+            KeyCode::Enter if n > 0 => {
+                let s = ag.analysis.suggestions[ag.cursor].clone();
+                self.run_suggestion(s);
+            }
+            _ => {}
+        }
+    }
+
+    /// Take a suggested next step into the normal args prompt: pick its tool,
+    /// prefill the args, and let the user review and press Enter to run it —
+    /// so every run still goes through the install / conflict / arg checks.
+    fn run_suggestion(&mut self, s: agent::Suggestion) {
+        match self
+            .tools
+            .iter()
+            .position(|t| t.name.eq_ignore_ascii_case(s.tool.trim()))
+        {
+            Some(i) => {
+                self.agent = None;
+                self.selected = i;
+                // make sure the chosen tool is visible so the selection is valid:
+                // drop any filter and jump to the "All" category tab.
+                if !self.visible().contains(&i) {
+                    self.filter.clear();
+                    self.cat = 0;
+                }
+                self.editor.set(&s.args);
+                self.history.reset();
+                self.mode = Mode::Input;
+                self.status_line = format!(
+                    "agent → {} · review args, Enter runs · Esc cancels",
+                    self.tools[i].name
+                );
+            }
+            None => {
+                self.status_line = format!("agent suggested an unknown tool: '{}'", s.tool);
+            }
         }
     }
 
