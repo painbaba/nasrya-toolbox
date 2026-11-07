@@ -1,0 +1,24 @@
+{
+    "version": "1.9.0-jumbo-1",
+    "description": "John the Ripper jumbo: offline password cracker (official Openwall Windows build)",
+    "homepage": "https://www.openwall.com/john/",
+    "license": "GPL-2.0-or-later",
+    "notes": "Official Openwall Windows build (2019). The *2john .pl helpers need Perl (scoop install perl).",
+    "architecture": {
+        "64bit": {
+            "url": "https://www.openwall.com/john/k/john-1.9.0-jumbo-1-win64.zip",
+            "hash": "7d59ea68d39a30a4988c9eb751a57d37d3fd90150ceeb6ee9afc2a76d13daa16",
+            "extract_dir": "john-1.9.0-jumbo-1-win64"
+        }
+    },
+    "bin": [
+        "run\\john.exe",
+        "run\\zip2john.exe",
+        "run\\rar2john.exe",
+        "run\\keepass2john.exe",
+        "run\\bitlocker2john.exe",
+        "run\\putty2john.exe",
+        "run\\gpg2john.exe",
+        "run\\unshadow.exe"
+    ]
+}

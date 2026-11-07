@@ -37,6 +37,8 @@
 
 buckets:
   security: https://github.com/opsqw/scoop-security   # formerly whoopscs/scoop-security
+  # nasrya's own manifests (bucket/ in this repo) for tools no other bucket packages
+  nasrya: https://github.com/tahabenissa/nasrya-toolbox
 
 tools:
   - name: nmap

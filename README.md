@@ -155,6 +155,12 @@ Edit [`tools.yaml`](tools.yaml) — no code changes:
 A bucket that Scoop doesn't know by name also needs its URL in the top-level `buckets:` map,
 so nasrya can add it on first install.
 
+**Tools no Scoop bucket packages** (gau, John jumbo, steghide, nikto, ...) get a manifest in
+this repo's own Scoop bucket, [`bucket/`](bucket), and `bucket: nasrya` in their entry. Scoop then
+handles the download, **SHA-256 verification**, extraction and shims, and nasrya adds the bucket on
+first use. A manifest needs a pinned `url` + `hash` (`cargo test` checks every manifest is
+well-formed and that every `bucket: nasrya` entry has one).
+
 **Python tools** install with pipx (each in its own venv). If pipx is missing, nasrya installs
 Python and pipx through Scoop first:
 
@@ -203,6 +209,8 @@ install.rs     install planning (scoop / pipx)         ──
 scoop.rs       scoop buckets + package installs        ──
 envpath.rs     picks up PATH changes after installs    ──
 args.rs        quote-aware argument splitting          ──
+hashid.rs      built-in hash identifier                ──
+editor.rs      args prompt line editor + history       ──
 runner.rs      spawn + stream / detach + kill tree      ──
 app.rs         state machine, launch/install control    ──
 ui.rs          dashboard rendering                       ── presentation layer

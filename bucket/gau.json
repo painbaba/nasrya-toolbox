@@ -1,0 +1,24 @@
+{
+    "version": "2.2.4",
+    "description": "getallurls: fetch known URLs from AlienVault OTX, the Wayback Machine, Common Crawl and URLScan",
+    "homepage": "https://github.com/lc/gau",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/lc/gau/releases/download/v2.2.4/gau_2.2.4_windows_amd64.zip",
+            "hash": "46eac6d96c9479368d3006191611a33084f177fe4025efed985f40f4b7e51e64"
+        }
+    },
+    "bin": "gau.exe",
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/lc/gau/releases/download/v$version/gau_$version_windows_amd64.zip"
+            }
+        },
+        "hash": {
+            "url": "https://github.com/lc/gau/releases/download/v$version/gau_$version_checksums.txt"
+        }
+    }
+}

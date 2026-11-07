@@ -1,0 +1,11 @@
+{
+    "version": "0.5.1",
+    "description": "Hide / extract data in JPEG, BMP, WAV and AU files (legacy Win32 build)",
+    "homepage": "https://steghide.sourceforge.net/",
+    "license": "GPL-2.0-or-later",
+    "notes": "This is the original 2003 Win32 build (bundles its own Cygwin DLLs). It is old but still the reference steghide.",
+    "url": "https://downloads.sourceforge.net/project/steghide/steghide/0.5.1/steghide-0.5.1-win32.zip",
+    "hash": "d8211b43dc4dad1333c9ac8b60f5a468f5f8d744f80f9571df431def925cd579",
+    "extract_dir": "steghide",
+    "bin": "steghide.exe"
+}

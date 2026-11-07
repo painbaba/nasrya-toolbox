@@ -217,3 +217,6 @@ CATALOG (tools.yaml) is looked up in this order:\n\
         banner::LOGO
     );
 }
+
+#[cfg(test)]
+mod bucket_tests;

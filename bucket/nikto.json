@@ -1,0 +1,20 @@
+{
+    "version": "2.6.1",
+    "description": "Web server scanner (dangerous files, outdated software, misconfigurations)",
+    "homepage": "https://github.com/sullo/nikto",
+    "license": "GPL-2.0-only",
+    "depends": "perl",
+    "url": "https://github.com/sullo/nikto/archive/refs/tags/2.6.1.zip",
+    "hash": "4dda46df093dbd5b43ab476764232a3771be8380f954d40cbccac314b712c634",
+    "extract_dir": "nikto-2.6.1",
+    "pre_install": "Set-Content -Path \"$dir\\nikto.cmd\" -Value '@perl \"%~dp0program\\nikto.pl\" %*' -Encoding Ascii",
+    "bin": "nikto.cmd",
+    "checkver": {
+        "github": "https://github.com/sullo/nikto",
+        "regex": "tag/([\\d.]+)\""
+    },
+    "autoupdate": {
+        "url": "https://github.com/sullo/nikto/archive/refs/tags/$version.zip",
+        "extract_dir": "nikto-$version"
+    }
+}
