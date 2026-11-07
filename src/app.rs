@@ -1,4 +1,8 @@
 //! Application state and the main event loop.
+//!
+//! Tools run in up to `SLOTS` independent terminals (plus the console, which
+//! holds installs, hash ids and messages); the tool list is browsed by
+//! category, and a tool can sit in several categories.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -16,10 +20,10 @@ use crate::editor::{History, LineEditor};
 use crate::envpath;
 use crate::hashid;
 use crate::install;
-use crate::registry::{Catalog, Install, Launch, Tool};
-use crate::runlog;
+use crate::registry::{self, Catalog, Install, Launch, Tool};
 use crate::runner::{self, AppEvent};
 use crate::scoop;
+use crate::session::{Session, CONSOLE, SLOTS};
 use crate::theme::{Field, Settings};
 use crate::ui;
 
@@ -32,19 +36,55 @@ pub enum ToolStatus {
     Conflict,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum Mode {
     Browsing,
     /// editing the selected tool's arguments
     Input,
     /// typing a hash for the built-in identifier
     HashInput,
-    /// typing a line for the running process's stdin
+    /// typing a line for the focused terminal's stdin
     StdinInput,
     /// typing a filter for the tool list (applied live)
     Filter,
     /// typing text to find in the output
     Search,
+    /// every terminal is busy: pick one (1-4) to replace, or Esc
+    SlotPick,
+}
+
+impl Mode {
+    /// Modes that type into the line editor.
+    pub fn is_prompt(&self) -> bool {
+        !matches!(self, Mode::Browsing | Mode::SlotPick)
+    }
+}
+
+/// One tab of the category bar.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum CatTab {
+    All,
+    Installed,
+    Cat(String),
+}
+
+impl CatTab {
+    pub fn label(&self) -> String {
+        match self {
+            CatTab::All => "All".into(),
+            CatTab::Installed => "Installed".into(),
+            CatTab::Cat(id) => registry::category_label(id),
+        }
+    }
+}
+
+/// A second press is needed for these.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Confirm {
+    /// close terminal N (1-based) although its tool is running
+    Close(usize),
+    /// quit although tools are running
+    Quit,
 }
 
 /// State of the `t` appearance overlay.
@@ -68,25 +108,31 @@ pub struct App {
     /// For tools in Conflict: the path of the program that's actually found.
     conflicts: Vec<Option<PathBuf>>,
     pub selected: usize,
-    /// Tool-list filter (empty = show everything).
+    /// Tool-list filter (empty = show everything in the category).
     pub filter: String,
-    pub output: Vec<String>,
-    /// Output rows scrolled up from the bottom (0 = follow new output).
-    pub scroll: usize,
-    /// Set by the renderer: (visible rows, max useful scroll, row width).
-    pub view: std::cell::Cell<(usize, usize, usize)>,
-    /// Last output search, and the output line it matched.
+    /// The category bar, and which tab is active.
+    pub cat_tabs: Vec<CatTab>,
+    pub cat: usize,
+    /// Installs, hash ids and messages. Always there, can't be closed.
+    pub console: Session,
+    /// Tool terminals 1..=SLOTS.
+    pub slots: [Option<Session>; SLOTS],
+    /// Terminal in front: 0 = console, 1..=SLOTS = a slot.
+    pub focus: usize,
+    /// Show all slots in a 2x2 grid instead of one terminal.
+    pub grid: bool,
+    /// Last find-in-output text.
     search: String,
-    pub search_hit: Option<usize>,
     pub mode: Mode,
     pub editor: LineEditor,
     history: History,
-    pub running: bool,
-    pub running_pid: Option<u32>,
-    /// Log file of the current run / install.
-    log: Option<runlog::RunLog>,
-    /// stdin of the running tool (None for installs, or after Ctrl+D)
-    proc_stdin: Option<std::process::ChildStdin>,
+    /// A key that needs a second press (x on a running tool, q with tools running).
+    pub confirm: Option<Confirm>,
+    /// Run waiting for the user to pick a slot: (tool index, args).
+    pending: Option<(usize, Vec<String>)>,
+    next_id: u64,
+    /// Counts finished processes, to find the oldest finished terminal.
+    ended_seq: u64,
     pub status_line: String,
     pub tick: u64,
     /// The '?' key overlay is open.
@@ -97,7 +143,7 @@ pub struct App {
     pub appearance: Option<Appearance>,
     /// A background detection pass is in flight.
     detecting: bool,
-    /// The running process is a scoop install (so re-detect when it exits).
+    /// The console is running a scoop install (so re-detect when it exits).
     installing: bool,
     screen: Screen,
     tx: Sender<AppEvent>,
@@ -110,37 +156,41 @@ impl App {
         let Catalog { tools, buckets } = catalog;
         let (tx, rx) = mpsc::channel();
         let n = tools.len();
-        let mut output = vec![
-            ":: winsploit ready. tools above; output appears here.".into(),
-            ":: Enter runs the highlighted tool · i installs it (scoop or pipx).".into(),
-            format!(":: catalog: {}", catalog_path.display()),
-        ];
+        let mut console = Session::new(CONSOLE, "console", "installs · hash ids · messages");
+        console.push(":: winsploit ready. Pick a tool on the left; ← → switch category.");
+        console.push(format!(
+            ":: Enter runs it in its own terminal (up to {SLOTS} at once) · i installs it."
+        ));
+        console.push(format!(":: catalog: {}", catalog_path.display()));
         if let Some(ignored) = ignored {
-            output.push(format!(
+            console.push(format!(
                 "[err] ignored {} — catalogs aren't loaded from the current directory \
                  unless you pass --catalog",
                 ignored.display()
             ));
         }
-        App {
+        let cat_tabs = Self::build_tabs(&tools);
+        let mut app = App {
             tools,
             buckets,
             status: vec![ToolStatus::Unknown; n],
             conflicts: vec![None; n],
             selected: 0,
             filter: String::new(),
-            output,
-            scroll: 0,
-            view: std::cell::Cell::new((10, 0, 80)),
+            cat_tabs,
+            cat: 0,
+            console,
+            slots: Default::default(),
+            focus: 0,
+            grid: false,
             search: String::new(),
-            search_hit: None,
             mode: Mode::Browsing,
             editor: LineEditor::default(),
             history: History::default(),
-            running: false,
-            running_pid: None,
-            proc_stdin: None,
-            log: None,
+            confirm: None,
+            pending: None,
+            next_id: CONSOLE,
+            ended_seq: 0,
             status_line: "detecting tools…".into(),
             tick: 0,
             show_help: false,
@@ -152,7 +202,36 @@ impl App {
             tx,
             rx,
             quit: false,
+        };
+        // start on the first tool in list order, not catalog order
+        if let Some(&first) = app.visible().first() {
+            app.selected = first;
         }
+        app
+    }
+
+    /// All, Installed, then every category in use: known ones in taxonomy
+    /// order, unknown ones alphabetically after.
+    fn build_tabs(tools: &[Tool]) -> Vec<CatTab> {
+        let mut ids: Vec<String> = Vec::new();
+        for t in tools {
+            let cats: Vec<String> = if t.categories.is_empty() {
+                vec!["other".into()]
+            } else {
+                t.categories.clone()
+            };
+            for c in cats {
+                if !ids.contains(&c) {
+                    ids.push(c);
+                }
+            }
+        }
+        ids.sort_by(|a, b| {
+            (registry::category_rank(a), a.as_str()).cmp(&(registry::category_rank(b), b.as_str()))
+        });
+        let mut tabs = vec![CatTab::All, CatTab::Installed];
+        tabs.extend(ids.into_iter().map(CatTab::Cat));
+        tabs
     }
 
     pub fn run(mut self, terminal: &mut DefaultTerminal) -> Result<()> {
@@ -175,16 +254,207 @@ impl App {
                         Screen::Main => self.on_key(key),
                     },
                     // bracketed paste: the whole pasted text arrives at once
-                    Event::Paste(text) if self.mode != Mode::Browsing => {
-                        self.editor.insert_str(&text)
-                    }
+                    Event::Paste(text) if self.mode.is_prompt() => self.editor.insert_str(&text),
                     _ => {}
                 }
             }
             self.tick = self.tick.wrapping_add(1);
         }
+        self.kill_all();
         Ok(())
     }
+
+    // ------------------------------------------------------------ terminals
+
+    /// The terminal at position `pos` (0 = console, 1..=SLOTS = slots).
+    pub fn session(&self, pos: usize) -> Option<&Session> {
+        if pos == 0 {
+            Some(&self.console)
+        } else {
+            self.slots.get(pos - 1).and_then(Option::as_ref)
+        }
+    }
+
+    fn session_mut(&mut self, pos: usize) -> Option<&mut Session> {
+        if pos == 0 {
+            Some(&mut self.console)
+        } else {
+            self.slots.get_mut(pos - 1).and_then(Option::as_mut)
+        }
+    }
+
+    pub fn focused(&self) -> Option<&Session> {
+        self.session(self.focus)
+    }
+
+    fn focused_mut(&mut self) -> Option<&mut Session> {
+        self.session_mut(self.focus)
+    }
+
+    /// Where the session with this id lives, if it still exists.
+    fn position_of(&self, sid: u64) -> Option<usize> {
+        if sid == CONSOLE {
+            return Some(0);
+        }
+        self.slots
+            .iter()
+            .position(|s| s.as_ref().is_some_and(|s| s.id == sid))
+            .map(|i| i + 1)
+    }
+
+    /// Is the terminal at `pos` on screen right now?
+    fn on_screen(&self, pos: usize) -> bool {
+        pos == self.focus || (self.grid && pos > 0)
+    }
+
+    fn set_focus(&mut self, pos: usize) {
+        self.focus = pos.min(SLOTS);
+        if self.focus == 0 {
+            self.grid = false;
+        }
+        if let Some(s) = self.focused_mut() {
+            s.unread = false;
+        }
+    }
+
+    /// Tab / Shift+Tab: the next terminal that has something in it (the
+    /// console counts, except in the grid, which only shows slots).
+    fn cycle_focus(&mut self, forward: bool) {
+        let n = SLOTS + 1;
+        let mut pos = self.focus;
+        for _ in 0..n {
+            pos = if forward {
+                (pos + 1) % n
+            } else {
+                (pos + n - 1) % n
+            };
+            let usable = if pos == 0 {
+                !self.grid
+            } else {
+                self.slots[pos - 1].is_some()
+            };
+            if usable {
+                self.set_focus(pos);
+                return;
+            }
+        }
+    }
+
+    pub fn running_count(&self) -> usize {
+        self.slots.iter().flatten().filter(|s| s.running()).count()
+            + usize::from(self.console.running())
+    }
+
+    /// The slot a new run goes to: the first empty one, else the one whose
+    /// tool finished longest ago. None when every slot is still running.
+    pub fn free_slot(&self) -> Option<usize> {
+        if let Some(i) = self.slots.iter().position(Option::is_none) {
+            return Some(i);
+        }
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.as_ref().filter(|s| !s.running()).map(|s| (s.ended, i)))
+            .min()
+            .map(|(_, i)| i)
+    }
+
+    /// Start `tool` with `args` in slot `slot` (0-based), replacing (and
+    /// killing) whatever is there, and bring it to the front.
+    fn start_tool(&mut self, slot: usize, tool: usize, args: Vec<String>) {
+        if let Some(mut old) = self.slots[slot].take() {
+            if old.running() {
+                old.kill();
+                old.exited(None, 0); // closes its log
+            }
+        }
+        let t = self.tools[tool].clone();
+        self.next_id += 1;
+        let mut s = Session::new(self.next_id, &t.name, &t.description);
+        if let Some(note) = &t.note {
+            s.push(format!(":: note: {note}"));
+        }
+        let shown = format!("{} {}", t.run_cmd, args::join(&args));
+        s.push(format!("$ {shown}"));
+        let cmd = runner::tool_command(&t.run_cmd, &args);
+        match runner::spawn_streaming(cmd, self.tx.clone(), true, s.id) {
+            Ok(sp) => {
+                s.open_log(&t.name, &shown);
+                self.status_line = format!(
+                    "running {} in terminal {} (pid {})",
+                    t.name,
+                    slot + 1,
+                    sp.pid
+                );
+                s.started(sp.pid, sp.stdin);
+                if t.launch == Launch::Web {
+                    // a local web app: give the server a moment, then open it
+                    let url = t.url.clone().unwrap_or_default();
+                    s.push(format!(":: opening {url} in your browser"));
+                    self.open_url_later(s.id, url, 2);
+                }
+            }
+            Err(e) => s.push(format!("[err] failed to launch: {e}")),
+        }
+        self.slots[slot] = Some(s);
+        self.set_focus(slot + 1);
+    }
+
+    /// Run in a free slot, or ask which busy one to replace.
+    fn run_in_slot(&mut self, tool: usize, args: Vec<String>) {
+        match self.free_slot() {
+            Some(slot) => self.start_tool(slot, tool, args),
+            None => {
+                self.pending = Some((tool, args));
+                self.mode = Mode::SlotPick;
+            }
+        }
+    }
+
+    /// `x`: close the focused terminal. A running tool needs a second `x`.
+    fn close_focused(&mut self, confirmed: bool) {
+        if self.focus == 0 {
+            self.status_line = "the console stays open (it holds installs and messages)".into();
+            return;
+        }
+        let pos = self.focus;
+        let Some(s) = self.slots[pos - 1].as_ref() else {
+            self.status_line = format!("terminal {pos} is already free");
+            return;
+        };
+        if s.running() && !confirmed {
+            self.status_line = format!(
+                "{} is still running — press x again to stop it and close terminal {pos}",
+                s.title
+            );
+            self.confirm = Some(Confirm::Close(pos));
+            return;
+        }
+        let mut s = self.slots[pos - 1].take().expect("checked above");
+        if s.running() {
+            s.kill();
+            s.exited(None, 0);
+        }
+        self.status_line = format!("closed terminal {pos} ({}) · its log is kept", s.title);
+        if !self.grid {
+            // show a neighbour that still has something in it, else the console
+            let next = (1..=SLOTS)
+                .filter(|&p| self.slots[p - 1].is_some())
+                .min_by_key(|&p| p.abs_diff(pos))
+                .unwrap_or(0);
+            self.set_focus(next);
+        }
+    }
+
+    /// Stop every running process (on quit).
+    fn kill_all(&mut self) {
+        for s in self.slots.iter_mut().flatten() {
+            s.kill();
+        }
+        self.console.kill();
+    }
+
+    // ----------------------------------------------------------- detection
 
     /// Re-probe every tool on a background thread; the result comes back as
     /// `AppEvent::Detected`, so the UI keeps drawing meanwhile. With
@@ -205,7 +475,8 @@ impl App {
         std::thread::spawn(move || {
             if refresh_path {
                 for dir in envpath::refresh() {
-                    let _ = tx.send(AppEvent::Output(format!(":: PATH: picked up {dir}")));
+                    let line = format!(":: PATH: picked up {dir}");
+                    let _ = tx.send(AppEvent::Output { sid: CONSOLE, line });
                 }
             }
             let found = detect::probe_all(&probes);
@@ -236,58 +507,57 @@ impl App {
             self.status_line
                 .push_str(&format!(" · {conflicts} name conflict(s)"));
         }
-    }
-
-    fn push(&mut self, line: impl Into<String>) {
-        let line = line.into();
-        if line.starts_with("$ ") {
-            // a new command: jump back to the live tail
-            self.scroll = 0;
-        } else if self.scroll > 0 {
-            // scrolled up: keep the view still while output keeps coming
-            self.scroll += 1;
-        }
-        self.output.push(line);
-        const MAX: usize = 2000;
-        if self.output.len() > MAX {
-            let excess = self.output.len() - MAX;
-            self.output.drain(0..excess);
-            self.search_hit = self.search_hit.and_then(|h| h.checked_sub(excess));
-        }
+        // the Installed tab may have changed under the selection
+        self.keep_selection_visible();
     }
 
     fn on_runner_event(&mut self, ev: AppEvent) {
         match ev {
-            AppEvent::Output(l) => {
-                if let Some(log) = self.log.as_mut() {
-                    log.line(&l);
+            AppEvent::Output { sid, line } => {
+                let Some(pos) = self.position_of(sid) else {
+                    return; // its terminal was closed or replaced
+                };
+                let seen = self.on_screen(pos);
+                if let Some(s) = self.session_mut(pos) {
+                    s.output_line(line);
+                    s.unread |= !seen;
                 }
-                self.push(l)
             }
-            AppEvent::Exited(code) => {
-                self.running = false;
-                self.running_pid = None;
-                self.proc_stdin = None;
-                if let Some(log) = self.log.take() {
-                    log.finish(code);
-                }
-                if self.mode == Mode::StdinInput {
-                    self.mode = Mode::Browsing;
-                    self.editor.set("");
-                }
-                match code {
-                    Some(c) => self.push(format!("── process exited (code {c}) ──")),
-                    None => self.push("── process ended ──".to_string()),
+            AppEvent::Exited { sid, code } => {
+                self.ended_seq += 1;
+                let seq = self.ended_seq;
+                if let Some(pos) = self.position_of(sid) {
+                    let seen = self.on_screen(pos);
+                    let focused = pos == self.focus;
+                    if let Some(s) = self.session_mut(pos) {
+                        s.exited(code, seq);
+                        s.unread |= !seen;
+                        let title = s.title.clone();
+                        if pos > 0 && !focused {
+                            let how = match code {
+                                Some(c) => format!("exit {c}"),
+                                None => "ended".into(),
+                            };
+                            self.status_line =
+                                format!("{title} finished in terminal {pos} ({how})");
+                        }
+                    }
+                    if focused && self.mode == Mode::StdinInput {
+                        self.mode = Mode::Browsing;
+                        self.editor.set("");
+                    }
                 }
                 // Only an install can change what's on PATH; a plain tool run
                 // doesn't need a re-probe.
-                if std::mem::take(&mut self.installing) {
+                if sid == CONSOLE && std::mem::take(&mut self.installing) {
                     self.detect_all(true);
                 }
             }
             AppEvent::Detected(found) => self.on_detected(found),
         }
     }
+
+    // ----------------------------------------------------------------- keys
 
     fn on_key(&mut self, key: KeyEvent) {
         if self.appearance.is_some() {
@@ -300,10 +570,9 @@ impl App {
             return;
         }
         match self.mode {
-            Mode::Browsing => self.on_key_browsing(key.code),
-            Mode::Input | Mode::HashInput | Mode::StdinInput | Mode::Filter | Mode::Search => {
-                self.on_key_input(key)
-            }
+            Mode::Browsing => self.on_key_browsing(key),
+            Mode::SlotPick => self.on_key_slot_pick(key.code),
+            _ => self.on_key_input(key),
         }
     }
 
@@ -340,9 +609,28 @@ impl App {
                     Ok(path) => self.status_line = format!("appearance saved · {}", path.display()),
                     Err(e) => {
                         self.status_line = "appearance applied (not saved)".into();
-                        self.push(format!("[err] could not save appearance: {e}"));
+                        self.console
+                            .push(format!("[err] could not save appearance: {e}"));
                     }
                 }
+            }
+            _ => {}
+        }
+    }
+
+    /// All terminals busy: 1-4 replaces that one, Esc gives up.
+    fn on_key_slot_pick(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char(c @ '1'..='9') if (c as usize - '0' as usize) <= SLOTS => {
+                self.mode = Mode::Browsing;
+                if let Some((tool, args)) = self.pending.take() {
+                    self.start_tool(c as usize - '1' as usize, tool, args);
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.mode = Mode::Browsing;
+                self.pending = None;
+                self.status_line = "nothing was started".into();
             }
             _ => {}
         }
@@ -361,11 +649,41 @@ impl App {
         }
     }
 
-    fn on_key_browsing(&mut self, code: KeyCode) {
-        match code {
-            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
+    fn on_key_browsing(&mut self, key: KeyEvent) {
+        // a pending confirmation only survives until the next key
+        let confirm = self.confirm.take();
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                let n = self.running_count();
+                if n > 0 && confirm != Some(Confirm::Quit) {
+                    self.status_line =
+                        format!("{n} tool(s) still running — press q again to stop them and quit");
+                    self.confirm = Some(Confirm::Quit);
+                } else {
+                    self.quit = true;
+                }
+            }
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+            KeyCode::Left | KeyCode::Char('[') => self.step_category(-1),
+            KeyCode::Right | KeyCode::Char(']') => self.step_category(1),
+            KeyCode::Char(c @ '0'..='9') if (c as usize - '0' as usize) <= SLOTS => {
+                self.set_focus(c as usize - '0' as usize)
+            }
+            KeyCode::Tab => self.cycle_focus(true),
+            KeyCode::BackTab => self.cycle_focus(false),
+            KeyCode::Char('g') => {
+                self.grid = !self.grid;
+                if self.grid && self.focus == 0 {
+                    let first = (1..=SLOTS)
+                        .find(|&p| self.slots[p - 1].is_some())
+                        .unwrap_or(1);
+                    self.set_focus(first);
+                }
+            }
+            KeyCode::Char('x') => self.close_focused(confirm == Some(Confirm::Close(self.focus))),
+            KeyCode::Char('c') => self.cancel(),
+            KeyCode::Char('s') => self.open_stdin(),
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char('t') => {
                 self.appearance = Some(Appearance {
@@ -384,42 +702,23 @@ impl App {
                 self.mode = Mode::Filter;
             }
             KeyCode::Char('r') => self.detect_all(true),
-            KeyCode::PageUp => {
-                let (page, max, _) = self.view.get();
-                self.scroll = (self.scroll + page.saturating_sub(1).max(1)).min(max);
-            }
-            KeyCode::PageDown => {
-                let (page, _, _) = self.view.get();
-                self.scroll = self.scroll.saturating_sub(page.saturating_sub(1).max(1));
-            }
-            KeyCode::End => self.scroll = 0,
-            KeyCode::Home => self.scroll = self.view.get().1,
-            KeyCode::Char('i') if self.visible().contains(&self.selected) => {
-                self.install_selected()
-            }
-            KeyCode::Char('c') => self.cancel(),
+            KeyCode::PageUp => self.focused_mut().map_or((), Session::page_up),
+            KeyCode::PageDown => self.focused_mut().map_or((), Session::page_down),
+            KeyCode::End => self.focused_mut().map_or((), Session::follow),
+            KeyCode::Home => self.focused_mut().map_or((), Session::scroll_top),
             KeyCode::Char('h') => {
                 self.editor.set("");
                 self.history.reset();
                 self.mode = Mode::HashInput;
             }
             KeyCode::Enter | KeyCode::Char('i') if !self.visible().contains(&self.selected) => {
-                self.status_line = "no tool matches the filter (press / to change it)".into();
+                self.status_line = "no tool selected here (← → category, / filter)".into();
             }
+            KeyCode::Char('i') => self.install_selected(),
             KeyCode::Enter => {
                 if self.tools[self.selected].launch == Launch::Dataset {
                     // nothing to run, so no args prompt
                     self.show_dataset();
-                } else if self.running {
-                    if self.proc_stdin.is_some() {
-                        // talk to the running tool (answer a prompt, etc.)
-                        self.editor.set("");
-                        self.history.reset();
-                        self.mode = Mode::StdinInput;
-                    } else {
-                        self.status_line =
-                            "a process is already running (press c to cancel)".into();
-                    }
                 } else {
                     let hint = self.tools[self.selected].args_hint.clone();
                     self.editor.set(&hint.unwrap_or_default());
@@ -428,6 +727,24 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// `s`: type into the focused terminal's tool.
+    fn open_stdin(&mut self) {
+        let state = self
+            .focused()
+            .map(|s| (s.running(), s.has_stdin(), s.title.clone()));
+        match state {
+            Some((true, true, _)) => {
+                self.editor.set("");
+                self.history.reset();
+                self.mode = Mode::StdinInput;
+            }
+            Some((true, false, title)) => {
+                self.status_line = format!("{title} isn't reading input (closed with Ctrl+D?)");
+            }
+            _ => self.status_line = "nothing is running in this terminal".into(),
         }
     }
 
@@ -462,11 +779,17 @@ impl App {
                 match mode {
                     Mode::Search => {
                         self.search = text;
-                        self.search_hit = None;
+                        if let Some(s) = self.focused_mut() {
+                            s.search_hit = None;
+                        }
                         self.find_next(true);
                     }
                     Mode::HashInput => self.identify_hash(&text),
-                    Mode::StdinInput => self.send_stdin(&text),
+                    Mode::StdinInput => {
+                        if let Some(s) = self.focused_mut() {
+                            s.send(&text)
+                        }
+                    }
                     _ => self.launch(&text),
                 }
             }
@@ -494,10 +817,11 @@ impl App {
             KeyCode::Delete => e.delete(),
             KeyCode::Char('d') if ctrl && self.mode == Mode::StdinInput => {
                 // end-of-input: close the pipe so the tool sees EOF
-                self.proc_stdin = None;
                 self.mode = Mode::Browsing;
                 self.editor.set("");
-                self.push(":: closed the tool's input (EOF)");
+                if let Some(s) = self.focused_mut() {
+                    s.close_stdin();
+                }
             }
             KeyCode::Char('u') if ctrl => e.clear_to_start(),
             KeyCode::Char('w') if ctrl => e.delete_word_left(),
@@ -516,86 +840,102 @@ impl App {
         }
     }
 
-    /// Jump to the next match of the last search: `older` = further up
-    /// (n), otherwise further down (N). Case-insensitive; wraps around.
+    /// Jump to the next match of the last search in the focused terminal:
+    /// `older` = further up (n), otherwise further down (N).
     fn find_next(&mut self, older: bool) {
-        let needle = self.search.trim().to_lowercase();
+        let needle = self.search.trim().to_string();
         if needle.is_empty() {
             self.status_line = "nothing to find (press f)".into();
             return;
         }
-        let n = self.output.len();
-        if n == 0 {
+        let Some(s) = self.focused_mut() else {
+            self.status_line = "this terminal is empty".into();
             return;
-        }
-        let start = self.search_hit.unwrap_or(n); // first search: from the bottom
-        let hit = (1..=n)
-            .map(|k| {
-                if older {
-                    (start + n - k) % n
-                } else {
-                    (start + k) % n
-                }
-            })
-            .find(|&i| self.output[i].to_lowercase().contains(&needle));
-        match hit {
-            Some(i) => {
-                self.search_hit = Some(i);
-                self.scroll_to_line(i);
-                let total = self
-                    .output
-                    .iter()
-                    .filter(|l| l.to_lowercase().contains(&needle))
-                    .count();
-                self.status_line = format!(
-                    "'{}': {total} matching line(s) · n older · N newer",
-                    self.search.trim()
-                );
-            }
-            None => {
-                self.search_hit = None;
-                self.status_line = format!("'{}' not found in the output", self.search.trim());
-            }
+        };
+        self.status_line = match s.find_next(&needle, older) {
+            Some(total) => format!("'{needle}': {total} matching line(s) · n older · N newer"),
+            None => format!("'{needle}' not found in this terminal"),
+        };
+    }
+
+    // ----------------------------------------------------------- tool list
+
+    /// Is tool `i` in category tab `tab`?
+    fn in_tab(&self, i: usize, tab: &CatTab) -> bool {
+        match tab {
+            CatTab::All => true,
+            CatTab::Installed => self.status[i] == ToolStatus::Installed,
+            CatTab::Cat(id) => self.tools[i].in_category(id),
         }
     }
 
-    /// Scroll so output line `i` sits in the middle of the pane.
-    fn scroll_to_line(&mut self, i: usize) {
-        let (height, _, width) = self.view.get();
-        let width = width.max(1);
-        let rows_after: usize = self.output[i + 1..]
-            .iter()
-            .map(|l| l.chars().count().div_ceil(width).max(1))
-            .sum();
-        let rows_of_hit = self.output[i].chars().count().div_ceil(width).max(1);
-        // put the hit's first row about mid-pane
-        self.scroll = (rows_after + rows_of_hit).saturating_sub(height / 2 + 1);
-    }
-
-    /// Indices of the tools that match the current filter, in catalog order.
-    pub fn visible(&self) -> Vec<usize> {
+    /// Does tool `i` match the filter? Words AND together, each matching
+    /// the name, the description, or any of its categories.
+    fn matches_filter(&self, i: usize) -> bool {
         let needle = self.filter.trim().to_lowercase();
-        self.tools
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| {
-                needle.is_empty()
-                    || needle.split_whitespace().all(|w| {
-                        t.name.to_lowercase().contains(w)
-                            || t.category.to_lowercase().contains(w)
-                            || t.description.to_lowercase().contains(w)
-                    })
-            })
-            .map(|(i, _)| i)
-            .collect()
+        let t = &self.tools[i];
+        needle.split_whitespace().all(|w| {
+            t.name.to_lowercase().contains(w)
+                || t.description.to_lowercase().contains(w)
+                || t.categories.iter().any(|c| {
+                    c.contains(w) || registry::category_label(c).to_lowercase().contains(w)
+                })
+        })
     }
 
-    fn set_filter(&mut self, f: String) {
-        self.filter = f;
+    /// Tools in the active tab that match the filter, in display order.
+    pub fn visible(&self) -> Vec<usize> {
+        self.visible_in(&self.cat_tabs[self.cat])
+    }
+
+    /// Display order: in a category, the tools made for it come first, then
+    /// the ones that are also useful there. Elsewhere, grouped by main
+    /// category. Catalog order breaks ties.
+    pub fn visible_in(&self, tab: &CatTab) -> Vec<usize> {
+        let mut v: Vec<usize> = (0..self.tools.len())
+            .filter(|&i| self.in_tab(i, tab) && self.matches_filter(i))
+            .collect();
+        match tab {
+            CatTab::Cat(id) => v.sort_by_key(|&i| (self.tools[i].primary() != id, i)),
+            _ => v.sort_by_key(|&i| {
+                let p = self.tools[i].primary();
+                (registry::category_rank(p), p.to_string(), i)
+            }),
+        }
+        v
+    }
+
+    /// ← →: switch category tab.
+    fn step_category(&mut self, delta: i32) {
+        let n = self.cat_tabs.len() as i32;
+        self.cat = (self.cat as i32 + delta).rem_euclid(n) as usize;
+        self.keep_selection_visible();
+        let tab = &self.cat_tabs[self.cat];
+        self.status_line = match tab {
+            CatTab::All => "all tools, grouped by main category".into(),
+            CatTab::Installed => "tools installed on this machine".into(),
+            CatTab::Cat(id) => {
+                let blurb = registry::CATEGORIES
+                    .iter()
+                    .find(|c| c.id == id)
+                    .map(|c| c.blurb)
+                    .unwrap_or("");
+                format!("{}: {blurb}", tab.label())
+            }
+        };
+    }
+
+    /// If the selected tool left the list, select the first one shown.
+    fn keep_selection_visible(&mut self) {
         let vis = self.visible();
         if !vis.is_empty() && !vis.contains(&self.selected) {
             self.selected = vis[0];
         }
+    }
+
+    fn set_filter(&mut self, f: String) {
+        self.filter = f;
+        self.keep_selection_visible();
     }
 
     /// Move the selection by `delta` among the visible tools.
@@ -611,111 +951,90 @@ impl App {
         self.selected = vis[new];
     }
 
-    /// Send one line to the running tool's stdin (echoed in the pane).
-    fn send_stdin(&mut self, line: &str) {
-        use std::io::Write;
-        let Some(stdin) = self.proc_stdin.as_mut() else {
-            self.push("[err] the tool's input is closed");
-            return;
-        };
-        let res = stdin
-            .write_all(line.as_bytes())
-            .and_then(|_| stdin.write_all(b"\n"))
-            .and_then(|_| stdin.flush());
-        match res {
-            Ok(()) => {
-                if let Some(log) = self.log.as_mut() {
-                    log.line(&format!("> {line}"));
-                }
-                self.push(format!("> {line}"))
-            }
-            Err(e) => {
-                self.proc_stdin = None;
-                self.push(format!("[err] couldn't send input: {e}"));
-            }
-        }
-    }
+    // --------------------------------------------------------------- actions
 
     /// Built-in hash identifier (`h`): no install, works offline.
     fn identify_hash(&mut self, hash: &str) {
         if hash.trim().is_empty() {
             return;
         }
-        self.push(format!("$ hashid {}", hash.trim()));
+        self.console.push(format!("$ hashid {}", hash.trim()));
         for line in hashid::report(hash) {
-            self.push(line);
+            self.console.push(line);
         }
+        self.set_focus(0);
     }
 
     fn launch(&mut self, args_str: &str) {
         let status = self.status[self.selected];
-        let name = self.tools[self.selected].name.clone();
-        let cmd = self.tools[self.selected].run_cmd.clone();
+        let tool = self.tools[self.selected].clone();
+        let name = tool.name.clone();
 
-        if status == ToolStatus::Unknown {
-            self.status_line = "still detecting tools — try again in a moment".into();
-            return;
-        }
-        if status == ToolStatus::Conflict {
-            let path = self.conflicts[self.selected]
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
-            self.push(format!(
-                "[err] the '{}' on PATH ({path}) isn't {name} — a different program with \
-                 the same name comes first. Not running it.",
-                self.tools[self.selected].exe
-            ));
-            self.push(
-                "[err] fix: press i to install the right one, or move its folder earlier in PATH \
-                 (or uninstall the other program), then press r.",
-            );
-            return;
-        }
-        if status != ToolStatus::Installed {
-            self.push(format!(
-                "'{name}' is not installed — press i to install it first."
-            ));
-            return;
+        match status {
+            ToolStatus::Installed => {}
+            ToolStatus::Unknown => {
+                self.status_line = "still detecting tools — try again in a moment".into();
+                return;
+            }
+            ToolStatus::Missing => {
+                self.status_line = format!("{name} is not installed — press i to install it");
+                return;
+            }
+            ToolStatus::Conflict => {
+                let path = self.conflicts[self.selected]
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                self.console.push(format!(
+                    "[err] the '{}' on PATH ({path}) isn't {name} — a different program with \
+                     the same name comes first. Not running it.",
+                    tool.exe
+                ));
+                self.console.push(
+                    "[err] fix: press i to install the right one, or move its folder earlier in \
+                     PATH (or uninstall the other program), then press r.",
+                );
+                self.status_line = format!("{name}: name conflict, not run (see console)");
+                self.set_focus(0);
+                return;
+            }
         }
 
         let args = match args::split(args_str) {
             Ok(a) => a,
             Err(e) => {
-                self.push(format!("[err] can't parse args: {e} — nothing was run."));
+                self.status_line = format!("can't parse the args: {e} — nothing was run");
                 return;
             }
         };
-        let tool = self.tools[self.selected].clone();
-        if let Some(note) = &tool.note {
-            self.push(format!(":: note: {note}"));
-        }
 
         match tool.launch {
-            Launch::Stream => {
-                self.start_streaming(&name, &cmd, &args);
-            }
-            Launch::Gui => {
-                self.push(format!("$ {} {}", cmd, args::join(&args)));
-                match runner::spawn_detached(runner::tool_command(&cmd, &args)) {
-                    Ok(pid) => {
-                        self.push(format!(
-                            "── launched {name} (pid {pid}); it runs in its own window ──"
-                        ));
-                        self.status_line = format!("launched {name}");
-                    }
-                    Err(e) => self.push(format!("failed to launch: {e}")),
-                }
+            Launch::Stream => self.run_in_slot(self.selected, args),
+            Launch::Web if !tool.run_cmd.trim().is_empty() => {
+                // the server streams in a terminal; the browser opens after
+                self.run_in_slot(self.selected, args)
             }
             Launch::Web => {
                 let url = tool.url.clone().unwrap_or_default();
-                if cmd.trim().is_empty() {
-                    self.open_url(&url, 0);
-                } else {
-                    // start the server (streamed, cancellable), then give it
-                    // a moment before opening the browser
-                    if self.start_streaming(&name, &cmd, &args) {
-                        self.open_url(&url, 2);
+                self.console
+                    .push(format!(":: {name}: opening {url} in your browser"));
+                self.open_url_later(CONSOLE, url, 0);
+                self.status_line = format!("opened {name} in your browser");
+            }
+            Launch::Gui => {
+                self.console
+                    .push(format!("$ {} {}", tool.run_cmd, args::join(&args)));
+                match runner::spawn_detached(runner::tool_command(&tool.run_cmd, &args)) {
+                    Ok(pid) => {
+                        self.console.push(format!(
+                            "── launched {name} (pid {pid}); it runs in its own window ──"
+                        ));
+                        self.status_line = format!("launched {name} in its own window");
+                    }
+                    Err(e) => {
+                        self.console
+                            .push(format!("[err] failed to launch {name}: {e}"));
+                        self.status_line = format!("{name} failed to launch (see console)");
                     }
                 }
             }
@@ -734,10 +1053,8 @@ impl App {
                 return;
             }
             _ => {
-                self.push(format!(
-                    "'{}' is not installed — press i to install it first.",
-                    tool.name
-                ));
+                self.status_line =
+                    format!("{} is not installed — press i to install it", tool.name);
                 return;
             }
         }
@@ -747,7 +1064,8 @@ impl App {
         else {
             return;
         };
-        self.push(format!(":: {} — {}", tool.name, dir.display()));
+        let c = &mut self.console;
+        c.push(format!("$ {} — {}", tool.name, dir.display()));
         let mut files: Vec<(String, u64)> = std::fs::read_dir(&dir)
             .map(|rd| {
                 rd.filter_map(|e| e.ok())
@@ -770,56 +1088,24 @@ impl App {
             .max()
             .unwrap_or(0);
         for (n, size) in files {
-            self.push(format!("   {n:<w$}  {:>8.1} KB", size as f64 / 1024.0));
+            c.push(format!("   {n:<w$}  {:>8.1} KB", size as f64 / 1024.0));
         }
         match runner::copy_to_clipboard(&dir.to_string_lossy()) {
-            Ok(()) => self.push(":: folder path copied to the clipboard"),
-            Err(e) => self.push(format!("[err] couldn't copy the path: {e}")),
+            Ok(()) => c.push(":: folder path copied to the clipboard"),
+            Err(e) => c.push(format!("[err] couldn't copy the path: {e}")),
         }
+        self.set_focus(0);
     }
 
-    /// Run `cmd args` with output streamed into the pane. Returns whether it
-    /// started.
-    fn start_streaming(&mut self, name: &str, cmd: &str, args: &[String]) -> bool {
-        let shown = format!("{} {}", cmd, args::join(args));
-        self.push(format!("$ {shown}"));
-        match runner::spawn_streaming(runner::tool_command(cmd, args), self.tx.clone(), true) {
-            Ok(sp) => {
-                self.open_log(name, &shown);
-                let pid = sp.pid;
-                self.proc_stdin = sp.stdin;
-                self.running = true;
-                self.running_pid = Some(pid);
-                self.status_line = format!("running {name} (pid {pid})");
-                true
-            }
-            Err(e) => {
-                self.push(format!("failed to launch: {e}"));
-                false
-            }
-        }
-    }
-
-    /// Start this run's log file and say where it is.
-    fn open_log(&mut self, name: &str, command: &str) {
-        match runlog::RunLog::create(&runlog::log_dir(), name, command) {
-            Ok(log) => {
-                self.push(format!(":: log: {}", log.path().display()));
-                self.log = Some(log);
-            }
-            Err(e) => self.push(format!("[err] couldn't create a log file: {e}")),
-        }
-    }
-
-    /// Open `url` in the default browser after `delay_s` seconds.
-    fn open_url(&mut self, url: &str, delay_s: u64) {
-        self.push(format!(":: opening {url} in your browser"));
-        let url = url.to_string();
+    /// Open `url` in the default browser after `delay_s` seconds; a failure
+    /// is reported in terminal `sid`.
+    fn open_url_later(&self, sid: u64, url: String, delay_s: u64) {
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(delay_s));
             if let Err(e) = runner::open_url(&url) {
-                let _ = tx.send(AppEvent::Output(format!("[err] couldn't open {url}: {e}")));
+                let line = format!("[err] couldn't open {url}: {e}");
+                let _ = tx.send(AppEvent::Output { sid, line });
             }
         });
     }
@@ -839,9 +1125,11 @@ impl App {
                 .unwrap_or(false)
     }
 
+    /// Installs run in the console, one at a time, so they never take a
+    /// tool terminal.
     fn install_selected(&mut self) {
-        if self.running {
-            self.status_line = "wait for the current process to finish".into();
+        if self.console.running() {
+            self.status_line = "an install is already running (see console, 0)".into();
             return;
         }
         let tool = self.tools[self.selected].clone();
@@ -855,15 +1143,17 @@ impl App {
             python: tool.install == Install::Pipx && !pipx && Self::python_works(),
             bucket_added: tool.bucket.as_deref().is_some_and(scoop::bucket_added),
         };
+        self.set_focus(0);
         let steps = match install::plan(&tool, pre, &self.buckets) {
             Ok(s) => s,
             Err(e) => {
-                self.push(format!("[err] can't install {name}: {e}"));
+                self.console
+                    .push(format!("[err] can't install {name}: {e}"));
                 return;
             }
         };
         let line = steps.join(" && ");
-        self.push(format!("$ {line}"));
+        self.console.push(format!("$ {line}"));
 
         // scoop and pipx are .cmd/.bat shims, so go through cmd. Every token
         // in `line` was checked by install::plan to be free of cmd
@@ -874,25 +1164,28 @@ impl App {
             use std::os::windows::process::CommandExt;
             cmd.raw_arg(format!("/D /C {line}"));
         }
-        match runner::spawn_streaming(cmd, self.tx.clone(), false) {
+        match runner::spawn_streaming(cmd, self.tx.clone(), false, CONSOLE) {
             Ok(sp) => {
-                self.open_log(&format!("install-{name}"), &line);
-                self.running = true;
-                self.running_pid = Some(sp.pid);
+                self.console.open_log(&format!("install-{name}"), &line);
+                self.console.started(sp.pid, None);
                 self.installing = true;
                 self.status_line = format!("installing {name}…");
             }
-            Err(e) => self.push(format!("failed to start the installer: {e}")),
+            Err(e) => self
+                .console
+                .push(format!("[err] failed to start the installer: {e}")),
         }
     }
 
+    /// `c`: stop the focused terminal's tool; its output stays.
     fn cancel(&mut self) {
-        self.proc_stdin = None;
-        if let Some(pid) = self.running_pid {
-            runner::kill_tree(pid);
-            self.push(format!("sent kill to pid {pid}"));
-        } else {
-            self.status_line = "nothing is running".into();
+        let pos = self.focus;
+        match self.focused_mut().and_then(Session::kill) {
+            Some(pid) => {
+                self.status_line = format!("stopping pid {pid} · x closes the terminal");
+            }
+            None if pos == 0 => self.status_line = "no install is running".into(),
+            None => self.status_line = "nothing is running in this terminal".into(),
         }
     }
 }
@@ -900,52 +1193,226 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::RunState;
 
-    fn app_with(lines: &[&str]) -> App {
+    fn app() -> App {
         let cat = crate::registry::parse(include_str!("../tools.yaml")).unwrap();
-        let mut a = App::new(cat, PathBuf::from("tools.yaml"), None);
-        a.output = lines.iter().map(|s| s.to_string()).collect();
-        a.view.set((4, 0, 80));
-        a
+        App::new(cat, PathBuf::from("tools.yaml"), None)
+    }
+
+    fn key(c: KeyCode) -> KeyEvent {
+        KeyEvent::new(c, KeyModifiers::NONE)
+    }
+
+    /// A terminal holding `name`, running or finished at `ended`. No real
+    /// process (pid stays None), so kill() never calls taskkill.
+    fn fake(app: &mut App, slot: usize, name: &str, running: bool, ended: u64) {
+        app.next_id += 1;
+        let mut s = Session::new(app.next_id, name, "");
+        s.state = if running {
+            RunState::Running
+        } else {
+            RunState::Exited(Some(0))
+        };
+        s.ended = ended;
+        app.slots[slot] = Some(s);
+    }
+
+    fn tab(a: &App, label: &str) -> usize {
+        a.cat_tabs.iter().position(|t| t.label() == label).unwrap()
+    }
+
+    fn names(a: &App) -> Vec<String> {
+        a.visible()
+            .iter()
+            .map(|&i| a.tools[i].name.clone())
+            .collect()
     }
 
     #[test]
-    fn find_starts_at_the_newest_match_and_wraps() {
-        let mut a = app_with(&["open 22", "x", "OPEN 80", "y", "open 443", "z"]);
-        a.search = "open".into();
-        a.find_next(true);
-        assert_eq!(a.search_hit, Some(4)); // newest first
-        a.find_next(true);
-        assert_eq!(a.search_hit, Some(2)); // n = older, case-insensitive
-        a.find_next(true);
-        assert_eq!(a.search_hit, Some(0));
-        a.find_next(true);
-        assert_eq!(a.search_hit, Some(4)); // wraps to the newest
-        a.find_next(false);
-        assert_eq!(a.search_hit, Some(0)); // N = newer, wraps the other way
+    fn category_tabs_follow_the_taxonomy() {
+        let a = app();
+        let labels: Vec<String> = a.cat_tabs.iter().map(CatTab::label).collect();
+        assert_eq!(&labels[..4], ["All", "Installed", "OSINT", "Recon"]);
+        assert_eq!(labels.last().unwrap(), "Wordlists");
     }
 
     #[test]
-    fn find_reports_no_match() {
-        let mut a = app_with(&["a", "b"]);
-        a.search = "zzz".into();
-        a.find_next(true);
-        assert_eq!(a.search_hit, None);
-        assert!(a.status_line.contains("not found"));
+    fn a_tool_shows_in_every_category_it_has_with_specialists_first() {
+        let mut a = app();
+        a.cat = tab(&a, "Recon");
+        let recon = names(&a);
+        assert!(recon.contains(&"nmap".to_string())); // network first, recon second
+                                                      // tools whose main category is recon come before the others
+        let first_secondary = recon
+            .iter()
+            .position(|n| {
+                let t = a.tools.iter().find(|t| &t.name == n).unwrap();
+                t.primary() != "recon"
+            })
+            .unwrap();
+        assert!(recon[first_secondary..]
+            .iter()
+            .all(|n| { a.tools.iter().find(|t| &t.name == n).unwrap().primary() != "recon" }));
+        a.cat = tab(&a, "Network");
+        assert_eq!(names(&a)[0], "nmap");
     }
 
     #[test]
-    fn hit_is_scrolled_into_the_middle() {
-        let lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
-        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-        let mut a = app_with(&refs);
-        a.scroll_to_line(10);
-        // 9 rows after line 10, plus its own row, minus half a 4-row page
-        assert_eq!(a.scroll, 10 - 3);
-        let (rows, _) = crate::ui::visible_rows(&a.output, 80, 4, a.scroll);
-        assert!(rows.iter().any(|(i, _)| *i == 10));
-        // the newest line needs no scrolling
-        a.scroll_to_line(19);
-        assert_eq!(a.scroll, 0);
+    fn filter_works_inside_a_tab_and_matches_category_labels() {
+        let mut a = app();
+        a.cat = tab(&a, "Web");
+        a.set_filter("brute".into());
+        let n = names(&a);
+        assert!(n.contains(&"dirsearch".to_string()), "{n:?}");
+        assert!(!n.contains(&"nmap".to_string()));
+        a.cat = 0;
+        a.set_filter("mobile".into()); // a category label, not in any description
+        assert!(names(&a).contains(&"jadx".to_string()));
+    }
+
+    #[test]
+    fn switching_category_keeps_the_selection_in_view() {
+        let mut a = app();
+        a.selected = a.tools.iter().position(|t| t.name == "nmap").unwrap();
+        a.cat = tab(&a, "Recon") - 1;
+        a.step_category(1); // to Recon: nmap is there too
+        assert_eq!(a.tools[a.selected].name, "nmap");
+        a.step_category(1); // Network: still there
+        assert_eq!(a.tools[a.selected].name, "nmap");
+        a.cat = tab(&a, "Stego");
+        a.keep_selection_visible();
+        assert!(a.visible().contains(&a.selected));
+        // wraps around both ways
+        a.cat = 0;
+        a.step_category(-1);
+        assert_eq!(a.cat, a.cat_tabs.len() - 1);
+    }
+
+    #[test]
+    fn slots_fill_then_reuse_the_oldest_finished() {
+        let mut a = app();
+        assert_eq!(a.free_slot(), Some(0));
+        fake(&mut a, 0, "a", true, 0);
+        fake(&mut a, 1, "b", false, 9);
+        assert_eq!(a.free_slot(), Some(2)); // empty beats finished
+        fake(&mut a, 2, "c", false, 3);
+        fake(&mut a, 3, "d", true, 0);
+        assert_eq!(a.free_slot(), Some(2)); // c finished before b
+        fake(&mut a, 1, "b", true, 0);
+        fake(&mut a, 2, "c", true, 0);
+        assert_eq!(a.free_slot(), None); // all busy: ask
+    }
+
+    #[test]
+    fn all_busy_asks_which_to_replace() {
+        let mut a = app();
+        for i in 0..SLOTS {
+            fake(&mut a, i, "busy", true, 0);
+        }
+        let nmap = a.tools.iter().position(|t| t.name == "nmap").unwrap();
+        a.run_in_slot(nmap, vec![]);
+        assert_eq!(a.mode, Mode::SlotPick);
+        a.on_key(key(KeyCode::Esc));
+        assert_eq!(a.mode, Mode::Browsing);
+        assert!(a.pending.is_none());
+        assert!(a.slots.iter().flatten().all(|s| s.title == "busy"));
+    }
+
+    #[test]
+    fn closing_a_running_terminal_needs_a_second_x() {
+        let mut a = app();
+        fake(&mut a, 0, "nmap", true, 0);
+        fake(&mut a, 2, "ffuf", false, 1);
+        a.set_focus(1);
+        a.on_key(key(KeyCode::Char('x')));
+        assert!(a.slots[0].is_some(), "first x only asks");
+        assert_eq!(a.confirm, Some(Confirm::Close(1)));
+        a.on_key(key(KeyCode::Char('x')));
+        assert!(a.slots[0].is_none());
+        assert_eq!(a.focus, 3, "moves to the terminal that's left");
+        // a finished one closes at once; then only the console is left
+        a.on_key(key(KeyCode::Char('x')));
+        assert!(a.slots[2].is_none());
+        assert_eq!(a.focus, 0);
+        // another key in between cancels the confirmation
+        fake(&mut a, 0, "nmap", true, 0);
+        a.set_focus(1);
+        a.on_key(key(KeyCode::Char('x')));
+        a.on_key(key(KeyCode::Down));
+        a.on_key(key(KeyCode::Char('x')));
+        assert!(a.slots[0].is_some());
+    }
+
+    #[test]
+    fn quitting_with_tools_running_needs_a_second_q() {
+        let mut a = app();
+        fake(&mut a, 1, "nmap", true, 0);
+        a.on_key(key(KeyCode::Char('q')));
+        assert!(!a.quit);
+        a.on_key(key(KeyCode::Char('q')));
+        assert!(a.quit);
+    }
+
+    #[test]
+    fn output_goes_to_its_own_terminal_and_marks_unread() {
+        let mut a = app();
+        fake(&mut a, 0, "one", true, 0);
+        fake(&mut a, 1, "two", true, 0);
+        let (one, two) = (
+            a.slots[0].as_ref().unwrap().id,
+            a.slots[1].as_ref().unwrap().id,
+        );
+        a.set_focus(1);
+        a.on_runner_event(AppEvent::Output {
+            sid: one,
+            line: "a".into(),
+        });
+        a.on_runner_event(AppEvent::Output {
+            sid: two,
+            line: "b".into(),
+        });
+        assert_eq!(a.slots[0].as_ref().unwrap().output, ["a"]);
+        assert_eq!(a.slots[1].as_ref().unwrap().output, ["b"]);
+        assert!(!a.slots[0].as_ref().unwrap().unread);
+        assert!(a.slots[1].as_ref().unwrap().unread);
+        a.on_runner_event(AppEvent::Exited {
+            sid: two,
+            code: Some(0),
+        });
+        assert!(a.status_line.contains("two finished in terminal 2"));
+        a.on_key(key(KeyCode::Char('2')));
+        assert!(!a.slots[1].as_ref().unwrap().unread);
+        // a closed terminal's late output is dropped, not misrouted
+        a.slots[0] = None;
+        a.on_runner_event(AppEvent::Output {
+            sid: one,
+            line: "late".into(),
+        });
+        assert!(a
+            .slots
+            .iter()
+            .flatten()
+            .all(|s| !s.output.contains(&"late".into())));
+    }
+
+    #[test]
+    fn tab_cycles_through_open_terminals_and_grid_skips_the_console() {
+        let mut a = app();
+        fake(&mut a, 1, "x", true, 0);
+        fake(&mut a, 3, "y", true, 0);
+        a.on_key(key(KeyCode::Tab));
+        assert_eq!(a.focus, 2);
+        a.on_key(key(KeyCode::Tab));
+        assert_eq!(a.focus, 4);
+        a.on_key(key(KeyCode::Tab));
+        assert_eq!(a.focus, 0);
+        a.on_key(key(KeyCode::Char('g')));
+        assert!(a.grid);
+        assert_eq!(a.focus, 2);
+        a.on_key(key(KeyCode::BackTab));
+        assert_eq!(a.focus, 4, "grid never focuses the console");
+        a.on_key(key(KeyCode::Char('0')));
+        assert!(!a.grid);
     }
 }

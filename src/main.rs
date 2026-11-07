@@ -19,6 +19,7 @@ mod registry;
 mod runlog;
 mod runner;
 mod scoop;
+mod session;
 mod theme;
 mod ui;
 
@@ -132,7 +133,7 @@ fn list(explicit: Option<&Path>) -> Result<()> {
         .unwrap_or(0);
     let cat_w = tools
         .iter()
-        .map(|t| t.category.chars().count())
+        .map(|t| t.categories.join(",").chars().count())
         .max()
         .unwrap_or(0);
 
@@ -164,7 +165,10 @@ fn list(explicit: Option<&Path>) -> Result<()> {
             writeln!(
                 out,
                 "  {:<name_w$} [{:<cat_w$}] {:<9} {}",
-                t.name, t.category, state, t.description
+                t.name,
+                t.categories.join(","),
+                state,
+                t.description
             )?;
             if let detect::Found::Conflict(p) = f {
                 writeln!(

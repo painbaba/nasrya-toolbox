@@ -395,6 +395,11 @@ pub struct Glyphs {
     pub left: &'static str,
     pub right: &'static str,
     pub spinner: &'static [&'static str],
+    /// terminal tab: the tool finished cleanly / failed or was killed
+    pub done: &'static str,
+    pub failed: &'static str,
+    /// terminal tab: new output you haven't looked at
+    pub unread: &'static str,
 }
 
 pub static UNICODE: Glyphs = Glyphs {
@@ -407,6 +412,9 @@ pub static UNICODE: Glyphs = Glyphs {
     left: "◂",
     right: "▸",
     spinner: &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+    done: "✓",
+    failed: "✗",
+    unread: "•",
 };
 
 pub static ASCII: Glyphs = Glyphs {
@@ -419,6 +427,9 @@ pub static ASCII: Glyphs = Glyphs {
     left: "<",
     right: ">",
     spinner: &["|", "/", "-", "\\"],
+    done: "+",
+    failed: "x",
+    unread: "!",
 };
 
 const ASCII_BORDER: border::Set = border::Set {

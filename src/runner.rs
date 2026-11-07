@@ -11,12 +11,14 @@ use std::thread;
 
 use crate::detect;
 
-/// Messages sent from runner threads into the app event loop.
+/// Messages sent from runner threads into the app event loop. `sid` is the
+/// terminal (session) the process belongs to, so up to four tools can stream
+/// at once without their output mixing.
 pub enum AppEvent {
     /// One line of tool output (stderr lines are prefixed with "[err] ").
-    Output(String),
+    Output { sid: u64, line: String },
     /// The process finished with this exit code (None if it was killed/unknown).
-    Exited(Option<i32>),
+    Exited { sid: u64, code: Option<i32> },
     /// Background detection finished: one result per tool.
     Detected(Vec<detect::Found>),
 }
@@ -36,7 +38,7 @@ pub struct Spawned {
     pub stdin: Option<ChildStdin>,
 }
 
-/// Spawn `cmd`, streaming its output to `tx`.
+/// Spawn `cmd`, streaming its output to `tx`, tagged with session `sid`.
 ///
 /// The child never shares winsploit's console input: with `with_stdin` it gets
 /// a pipe the UI can type into, otherwise stdin is closed. (Inheriting the
@@ -45,6 +47,7 @@ pub fn spawn_streaming(
     mut cmd: Command,
     tx: Sender<AppEvent>,
     with_stdin: bool,
+    sid: u64,
 ) -> std::io::Result<Spawned> {
     let stdin = if with_stdin {
         Stdio::piped()
@@ -63,12 +66,12 @@ pub fn spawn_streaming(
     let mut readers = Vec::new();
     if let Some(out) = child.stdout.take() {
         let tx = tx.clone();
-        readers.push(thread::spawn(move || pump(out, &tx, "")));
+        readers.push(thread::spawn(move || pump(out, &tx, sid, "")));
     }
     // stderr lines are tagged so the UI can colour them
     if let Some(err) = child.stderr.take() {
         let tx = tx.clone();
-        readers.push(thread::spawn(move || pump(err, &tx, "[err] ")));
+        readers.push(thread::spawn(move || pump(err, &tx, sid, "[err] ")));
     }
 
     // waiter thread: owns the child so we can reap it; we keep only the PID.
@@ -79,7 +82,7 @@ pub fn spawn_streaming(
         for r in readers {
             let _ = r.join();
         }
-        let _ = tx.send(AppEvent::Exited(code));
+        let _ = tx.send(AppEvent::Exited { sid, code });
     });
 
     Ok(Spawned { pid, stdin })
@@ -90,7 +93,7 @@ pub fn spawn_streaming(
 /// Reads raw bytes rather than `BufRead::lines()`: that errors on the first
 /// line that isn't valid UTF-8 (common: Windows tools print in the console
 /// codepage), and stopping there would leave the child blocked on a full pipe.
-fn pump(src: impl Read, tx: &Sender<AppEvent>, prefix: &str) {
+fn pump(src: impl Read, tx: &Sender<AppEvent>, sid: u64, prefix: &str) {
     let mut reader = BufReader::new(src);
     let mut buf = Vec::new();
     loop {
@@ -99,10 +102,8 @@ fn pump(src: impl Read, tx: &Sender<AppEvent>, prefix: &str) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
                 let line = clean_line(&buf);
-                if tx
-                    .send(AppEvent::Output(format!("{prefix}{line}")))
-                    .is_err()
-                {
+                let line = format!("{prefix}{line}");
+                if tx.send(AppEvent::Output { sid, line }).is_err() {
                     break;
                 }
             }
@@ -264,7 +265,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut cmd = std::process::Command::new("cmd");
         cmd.args(["/D", "/C", "sort"]);
-        let mut sp = spawn_streaming(cmd, tx, true).unwrap();
+        let mut sp = spawn_streaming(cmd, tx, true, 7).unwrap();
         let mut stdin = sp.stdin.take().expect("piped stdin");
         stdin.write_all(b"pear\napple\n").unwrap();
         drop(stdin); // EOF
@@ -275,8 +276,14 @@ mod tests {
                 .recv_timeout(Duration::from_secs(10))
                 .expect("runner stalled")
             {
-                AppEvent::Output(l) => lines.push(l),
-                AppEvent::Exited(_) => break,
+                AppEvent::Output { sid, line } => {
+                    assert_eq!(sid, 7);
+                    lines.push(line)
+                }
+                AppEvent::Exited { sid, .. } => {
+                    assert_eq!(sid, 7);
+                    break;
+                }
                 AppEvent::Detected(_) => {}
             }
         }
@@ -298,7 +305,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut cmd = std::process::Command::new("cmd");
         cmd.args(["/D", "/C", "type"]).arg(&file);
-        spawn_streaming(cmd, tx, false).unwrap();
+        spawn_streaming(cmd, tx, false, 0).unwrap();
 
         let mut lines = Vec::new();
         loop {
@@ -306,8 +313,8 @@ mod tests {
                 .recv_timeout(Duration::from_secs(10))
                 .expect("runner stalled")
             {
-                AppEvent::Output(l) => lines.push(l),
-                AppEvent::Exited(code) => {
+                AppEvent::Output { line, .. } => lines.push(line),
+                AppEvent::Exited { code, .. } => {
                     assert_eq!(code, Some(0));
                     break;
                 }

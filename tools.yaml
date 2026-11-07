@@ -3,7 +3,12 @@
 #
 # Fields:
 #   name        display name
-#   category    recon | web | passwords | sniffing | forensics | ...
+#   categories  every category the tool is useful in, primary first:
+#               [web, recon]. It is listed under each one. Known ids, in
+#               dashboard order: osint recon network web exploit passwords
+#               reversing pwn mobile forensics crypto stego wordlists
+#               (others work too and are listed last). `category: web` is
+#               still accepted for a single one.
 #   description one line shown in the output pane header
 #   exe         the executable used to DETECT installation (looked up on PATH; .exe/.com/.bat/.cmd)
 #   install     (optional) scoop (default) | pipx
@@ -48,7 +53,7 @@ buckets:
 
 tools:
   - name: nmap
-    category: recon
+    categories: [network, recon]
     description: Network / port & service scanner
     exe: nmap
     scoop: nmap
@@ -56,7 +61,7 @@ tools:
     args_hint: "-sV -T4 scanme.nmap.org"
 
   - name: sqlmap
-    category: web
+    categories: [web, exploit]
     description: Automatic SQL injection tool
     exe: sqlmap
     scoop: sqlmap
@@ -64,7 +69,7 @@ tools:
     args_hint: "--version"
 
   - name: hashcat
-    category: passwords
+    categories: [passwords, crypto]
     description: GPU password / hash cracker (needs GPU drivers)
     exe: hashcat
     scoop: hashcat
@@ -72,7 +77,7 @@ tools:
     args_hint: "--version"
 
   - name: tshark
-    category: sniffing
+    categories: [network, forensics]
     description: Wireshark CLI — packet capture / analysis (needs Npcap + admin)
     exe: tshark
     scoop: wireshark
@@ -80,7 +85,7 @@ tools:
     args_hint: "-D"
 
   - name: nuclei
-    category: web
+    categories: [web, recon, exploit]
     description: Template-based vulnerability scanner
     exe: nuclei
     scoop: nuclei
@@ -89,7 +94,7 @@ tools:
     bucket: security
 
   - name: ffuf
-    category: web
+    categories: [web, recon]
     description: Fast web fuzzer
     exe: ffuf
     scoop: ffuf
@@ -98,7 +103,7 @@ tools:
     bucket: security
 
   - name: gobuster
-    category: recon
+    categories: [recon, web]
     description: Directory / DNS / vhost brute-forcer
     exe: gobuster
     scoop: gobuster
@@ -106,7 +111,7 @@ tools:
     args_hint: 'dir -u https://example.com -w "{app:seclists-lite}\common.txt"'
 
   - name: feroxbuster
-    category: web
+    categories: [web, recon]
     description: Fast recursive content discovery
     exe: feroxbuster
     scoop: feroxbuster
@@ -114,7 +119,7 @@ tools:
     args_hint: '-u https://example.com -w "{app:seclists-lite}\raft-medium-directories.txt"'
 
   - name: httpx
-    category: recon
+    categories: [recon, web]
     description: ProjectDiscovery HTTP prober (not the Python httpx CLI)
     exe: httpx
     scoop: httpx
@@ -125,7 +130,7 @@ tools:
     verify: { args: "-version", contains: "projectdiscovery" }
 
   - name: subfinder
-    category: recon
+    categories: [recon, osint]
     description: Passive subdomain enumeration
     exe: subfinder
     scoop: subfinder
@@ -134,7 +139,7 @@ tools:
     bucket: security
 
   - name: amass
-    category: recon
+    categories: [recon, osint]
     description: In-depth attack-surface / subdomain mapping
     exe: amass
     scoop: amass
@@ -142,7 +147,7 @@ tools:
     args_hint: "enum -passive -d example.com"
 
   - name: katana
-    category: web
+    categories: [web, recon]
     description: Next-gen web crawler / spider
     exe: katana
     scoop: katana
@@ -151,7 +156,7 @@ tools:
     bucket: security
 
   - name: rustscan
-    category: recon
+    categories: [network, recon]
     description: Ultra-fast port scanner that feeds nmap
     exe: rustscan
     scoop: rustscan
@@ -159,7 +164,7 @@ tools:
     args_hint: "-a 127.0.0.1 -- -sV"
 
   - name: openssl
-    category: crypto
+    categories: [crypto, network]
     description: General-purpose cryptography toolkit
     exe: openssl
     scoop: openssl
@@ -167,7 +172,7 @@ tools:
     args_hint: "version -a"
 
   - name: exiftool
-    category: forensics
+    categories: [forensics, osint, stego]
     description: Read / write file metadata
     exe: exiftool
     scoop: exiftool
@@ -175,7 +180,7 @@ tools:
     args_hint: "image.jpg"
 
   - name: strings
-    category: forensics
+    categories: [forensics, reversing]
     description: Sysinternals Strings - extract ASCII/Unicode text
     exe: strings
     scoop: sysinternals
@@ -184,7 +189,7 @@ tools:
     bucket: extras
 
   - name: radare2
-    category: reversing
+    categories: [reversing, pwn]
     description: Reverse-engineering framework
     exe: radare2
     scoop: radare2
@@ -192,7 +197,7 @@ tools:
     args_hint: "-v"
 
   - name: upx
-    category: reversing
+    categories: [reversing]
     description: Executable packer / unpacker
     exe: upx
     scoop: upx
@@ -200,7 +205,7 @@ tools:
     args_hint: "-V"
 
   - name: jadx
-    category: reversing
+    categories: [mobile, reversing]
     description: Android DEX to Java decompiler (needs a JDK)
     exe: jadx
     scoop: jadx
@@ -209,7 +214,7 @@ tools:
     bucket: extras
 
   - name: apktool
-    category: reversing
+    categories: [mobile, reversing]
     description: Decode / rebuild Android APK resources (needs a JRE)
     exe: apktool
     scoop: apktool
@@ -217,7 +222,7 @@ tools:
     args_hint: "--version"
 
   - name: arjun
-    category: web
+    categories: [web, recon]
     description: HTTP parameter discovery
     exe: arjun
     install: pipx
@@ -226,7 +231,7 @@ tools:
     args_hint: "-u https://example.com/endpoint"
 
   - name: dirsearch
-    category: web
+    categories: [web, recon]
     description: Web path brute-forcer
     exe: dirsearch
     install: pipx
@@ -236,7 +241,7 @@ tools:
     note: needs Python 3.11+
 
   - name: wfuzz
-    category: web
+    categories: [web, passwords]
     description: Web content / parameter fuzzer
     exe: wfuzz
     install: pipx
@@ -246,7 +251,7 @@ tools:
     note: wfuzz depends on pycurl and was last released in 2020; if the install fails on a new Python, ffuf or feroxbuster cover the same ground
 
   - name: commix
-    category: web
+    categories: [web, exploit]
     description: Automated command-injection exploiter
     exe: commix
     install: pipx
@@ -255,7 +260,7 @@ tools:
     args_hint: "--url=https://example.com/?addr=127.0.0.1 --batch"
 
   - name: hashid
-    category: passwords
+    categories: [passwords, crypto]
     description: Identify hash types
     exe: hashid
     install: pipx
@@ -264,7 +269,7 @@ tools:
     args_hint: "-m 5f4dcc3b5aa765d61d8327deb882cf99"
 
   - name: netexec
-    category: passwords
+    categories: [network, passwords, exploit]
     description: Network service auth / enumeration (nxc)
     exe: nxc
     install: pipx
@@ -274,7 +279,7 @@ tools:
     note: needs Python 3.11+; SMB/LDAP/WinRM work on Windows, some other protocols are degraded
 
   - name: rsactftool
-    category: crypto
+    categories: [crypto]
     description: Attack RSA given partial key material
     exe: RsaCtfTool
     install: pipx
@@ -284,7 +289,7 @@ tools:
     note: gmpy2 may need a C toolchain to build on Windows if no wheel matches your Python
 
   - name: volatility3
-    category: forensics
+    categories: [forensics]
     description: Memory-dump forensics framework
     exe: vol
     install: pipx
@@ -293,7 +298,7 @@ tools:
     args_hint: "-f memory.dmp windows.info"
 
   - name: ropper
-    category: pwn
+    categories: [pwn, reversing]
     description: Find ROP gadgets in binaries
     exe: ropper
     install: pipx
@@ -302,7 +307,7 @@ tools:
     args_hint: "--file binary.exe --search \"pop rdi\""
 
   - name: pwntools
-    category: pwn
+    categories: [pwn, exploit]
     description: CTF exploit-development framework (pwn CLI)
     exe: pwn
     install: pipx
@@ -312,7 +317,7 @@ tools:
     note: Windows support is limited - remote tubes, packing, asm and checksec work; local process/gdb features need Linux or WSL
 
   - name: theharvester
-    category: osint
+    categories: [osint, recon]
     description: Email / subdomain / host OSINT gathering
     exe: theHarvester
     install: pipx
@@ -322,7 +327,7 @@ tools:
     note: needs Python 3.14+ (pipx uses the Python it runs on)
 
   - name: sherlock
-    category: osint
+    categories: [osint]
     description: Hunt usernames across social networks
     exe: sherlock
     install: pipx
@@ -331,7 +336,7 @@ tools:
     args_hint: "username"
 
   - name: sleuthkit
-    category: forensics
+    categories: [forensics]
     description: Disk-image and filesystem forensics (TSK fls; also icat, mmls, ...)
     exe: fls
     scoop: sleuthkit
@@ -339,7 +344,7 @@ tools:
     args_hint: "-r -o 2048 image.dd"
 
   - name: detect-it-easy
-    category: reversing
+    categories: [reversing, forensics, mobile]
     description: Identify packers / compilers / file types (DIE console)
     exe: diec
     scoop: detect-it-easy
@@ -349,7 +354,7 @@ tools:
     note: this runs the console version (diec); the GUI is 'die', also on PATH
 
   - name: cutter
-    category: reversing
+    categories: [reversing]
     description: GUI for rizin (radare2 fork)
     exe: cutter
     scoop: cutter
@@ -359,7 +364,7 @@ tools:
     launch: gui
 
   - name: x64dbg
-    category: reversing
+    categories: [reversing, pwn]
     description: Windows x64 user-mode debugger
     exe: x64dbg
     scoop: x64dbg
@@ -370,7 +375,7 @@ tools:
     note: for 32-bit targets run x32dbg (also installed), or x96dbg to pick automatically
 
   - name: dnspy
-    category: reversing
+    categories: [reversing]
     description: .NET decompiler / debugger (dnSpyEx)
     exe: '{scoop_app}\dnSpy.exe'
     scoop: dnspyex
@@ -380,7 +385,7 @@ tools:
     launch: gui
 
   - name: ghidra
-    category: reversing
+    categories: [reversing, pwn]
     description: NSA software reverse-engineering suite
     exe: ghidraRun
     scoop: ghidra
@@ -391,7 +396,7 @@ tools:
     note: needs a JDK 21+ (e.g. scoop bucket add java; scoop install java/temurin25-jdk)
 
   - name: zaproxy
-    category: web
+    categories: [web, exploit]
     description: OWASP ZAP - intercepting proxy and web scanner
     exe: zap
     scoop: zaproxy
@@ -402,7 +407,7 @@ tools:
     note: needs a Java 17+ runtime (e.g. scoop bucket add java; scoop install java/temurin17-jre)
 
   - name: cyberchef
-    category: crypto
+    categories: [crypto, forensics, stego]
     description: The Cyber Swiss-Army Knife (encode / decode / crypto), offline
     exe: '{scoop_app}\CyberChef.html'
     scoop: cyberchef
@@ -412,7 +417,7 @@ tools:
     url: '{scoop_app}\CyberChef.html'
 
   - name: gau
-    category: recon
+    categories: [recon, osint, web]
     description: Fetch known URLs from web archives (getallurls)
     exe: gau
     scoop: gau
@@ -421,7 +426,7 @@ tools:
     args_hint: "--subs example.com"
 
   - name: john
-    category: passwords
+    categories: [passwords, crypto]
     description: John the Ripper (jumbo) hash cracker
     exe: john
     scoop: john-jumbo
@@ -431,7 +436,7 @@ tools:
     note: official Openwall Windows build (1.9.0-jumbo-1, 2019); zip2john, rar2john, keepass2john etc. are on PATH too
 
   - name: steghide
-    category: stego
+    categories: [stego, forensics]
     description: Hide / extract data in images and audio
     exe: steghide
     scoop: steghide
@@ -441,7 +446,7 @@ tools:
     note: legacy 2003 Win32 build - still the reference steghide; extract with -sf image.jpg -p <passphrase>
 
   - name: nikto
-    category: web
+    categories: [web, network]
     description: Web server vulnerability scanner
     exe: nikto
     scoop: nikto
@@ -450,7 +455,7 @@ tools:
     args_hint: "-h https://example.com"
 
   - name: seclists-lite
-    category: wordlists
+    categories: [wordlists, passwords, web]
     description: SecLists essentials - web, DNS, password, username and LFI wordlists
     exe: '{scoop_app}\common.txt'
     scoop: seclists-lite

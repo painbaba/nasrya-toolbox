@@ -7,8 +7,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, Appearance, Mode, ToolStatus};
+use crate::app::{App, Appearance, CatTab, Mode, ToolStatus};
 use crate::banner;
+use crate::registry::{self, Launch};
+use crate::session::{RunState, Session, SLOTS};
 use crate::theme::{Backdrop, Field, OverlayPos, Theme, ThemeName};
 
 pub fn render(f: &mut Frame, app: &App) {
@@ -30,8 +32,26 @@ pub fn render(f: &mut Frame, app: &App) {
         .constraints([Constraint::Percentage(36), Constraint::Percentage(64)])
         .split(chunks[1]);
 
-    render_tool_list(f, app, &th, body[0]);
-    render_output(f, app, &th, body[1]);
+    // left: category bar, tool list, card for the selected tool
+    let left = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(if body[0].height >= 16 { 6 } else { 0 }),
+        ])
+        .split(body[0]);
+    render_categories(f, app, &th, left[0]);
+    render_tool_list(f, app, &th, left[1]);
+    render_tool_card(f, app, &th, left[2]);
+
+    // right: terminal tabs, then one terminal or the 2x2 grid
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(3)])
+        .split(body[1]);
+    render_terminal_tabs(f, app, &th, right[0]);
+    render_terminals(f, app, &th, right[1]);
     render_footer(f, app, &th, chunks[2]);
     if let Some(ap) = &app.appearance {
         render_appearance(f, app, ap, &th, area);
@@ -43,24 +63,37 @@ pub fn render(f: &mut Frame, app: &App) {
 /// Every key binding, shown by `?`.
 pub const HELP: &[(&str, &str)] = &[
     ("↑ ↓  j k", "move in the tool list"),
+    (
+        "← →  [ ]",
+        "switch category: All · Installed · OSINT … Wordlists",
+    ),
     ("/", "filter tools by name / category / description"),
     (
         "Enter",
-        "run the tool (edit args first) · on a dataset: list it",
+        "run the tool in a free terminal (edit args first) · dataset: list it",
     ),
     (
-        "Enter (running)",
-        "send a line to the tool's input · Ctrl+D = EOF",
+        "0-4  Tab",
+        "show the console (0) or terminal 1-4 · Tab cycles",
     ),
-    ("i", "install the selected tool (scoop / pipx)"),
-    ("c", "cancel the running process (whole tree)"),
+    ("g", "grid: all four terminals at once"),
+    ("s", "send a line to the shown tool's input · Ctrl+D = EOF"),
+    ("c", "stop the shown tool (its output stays)"),
+    (
+        "x",
+        "close the shown terminal (twice if its tool is running)",
+    ),
+    (
+        "i",
+        "install the selected tool (scoop / pipx), in the console",
+    ),
     ("r", "re-detect installed tools (picks up PATH changes)"),
-    ("PgUp PgDn", "scroll the output · Home top · End follow"),
+    ("PgUp PgDn", "scroll the terminal · Home top · End follow"),
     ("f  n  N", "find in the output · older / newer match"),
     ("h", "identify a hash (built in)"),
     ("t", "appearance: theme, borders, glyphs, overlays"),
     ("?", "this help"),
-    ("q  Esc", "quit"),
+    ("q  Esc", "quit (twice if tools are still running)"),
     ("", ""),
     (
         "in prompts",
@@ -308,7 +341,7 @@ fn render_header(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
     let p = &th.pal;
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(10), Constraint::Length(28)])
+        .constraints([Constraint::Min(10), Constraint::Length(40)])
         .split(area);
 
     f.render_widget(Paragraph::new(banner::wordmark(th)), cols[0]);
@@ -324,20 +357,63 @@ fn render_header(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         .filter(|s| **s == ToolStatus::Missing)
         .count();
 
-    let stats = Line::from(vec![
+    let mut stats = Vec::new();
+    let running = app.running_count();
+    if running > 0 {
+        let spin = th.glyph.spinner;
+        let frame = spin[(app.tick / 2 % spin.len() as u64) as usize];
+        stats.push(Span::styled(
+            format!("{frame} {running} running  "),
+            th.strong(p.warn),
+        ));
+    }
+    stats.extend([
         Span::styled(th.glyph.installed, th.fg(p.ok)),
         Span::styled(format!(" {installed} "), th.fg(p.fg)),
         Span::styled(th.glyph.missing, th.fg(p.err)),
         Span::styled(format!(" {missing} "), th.fg(p.fg)),
         Span::styled(format!("· {} tools ", app.tools.len()), th.fg(p.dim)),
-    ])
-    .alignment(Alignment::Right);
+    ]);
+    let stats = Line::from(stats).alignment(Alignment::Right);
     f.render_widget(Paragraph::new(stats), cols[1]);
+}
+
+/// The category bar: every tab with how many tools it shows (with the
+/// current filter applied), scrolled so the active one is always in view.
+fn render_categories(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
+    let p = &th.pal;
+    let chips: Vec<(String, usize)> = app
+        .cat_tabs
+        .iter()
+        .map(|t| (t.label(), app.visible_in(t).len()))
+        .collect();
+    let width = |c: &(String, usize)| c.0.chars().count() + c.1.to_string().len() + 3;
+    let avail = area.width as usize;
+    let mut start = 0;
+    while start < app.cat && chips[start..=app.cat].iter().map(width).sum::<usize>() + 2 > avail {
+        start += 1;
+    }
+    let mut spans = Vec::new();
+    if start > 0 {
+        spans.push(Span::styled(th.glyph.left, th.fg(p.dim)));
+    }
+    for (i, (label, n)) in chips.iter().enumerate().skip(start) {
+        if i == app.cat {
+            let on = th.emph(Style::default().fg(p.ink).bg(p.accent));
+            spans.push(Span::styled(format!(" {label} {n} "), on));
+        } else {
+            let name = if *n == 0 { th.fg(p.dim) } else { th.fg(p.fg) };
+            spans.push(Span::styled(format!(" {label} "), name));
+            spans.push(Span::styled(format!("{n} "), th.fg(p.dim)));
+        }
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn render_tool_list(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
     let p = &th.pal;
     let g = th.glyph;
+    let tab = &app.cat_tabs[app.cat];
     // Pad names to the longest one so the category column stays aligned.
     let name_w = app
         .tools
@@ -356,10 +432,17 @@ fn render_tool_list(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
                 ToolStatus::Unknown => (g.unknown, p.dim),
                 ToolStatus::Conflict => (g.conflict, p.warn),
             };
+            // its other categories (the one being browsed goes without saying)
+            let others: Vec<&str> = t
+                .categories
+                .iter()
+                .map(String::as_str)
+                .filter(|c| !matches!(tab, CatTab::Cat(id) if id == c))
+                .collect();
             let line = Line::from(vec![
                 Span::styled(format!("{icon} "), th.fg(color)),
                 Span::styled(format!("{:<name_w$}", t.name), th.strong(p.fg)),
-                Span::styled(format!(" {}", t.category), th.fg(p.dim)),
+                Span::styled(format!(" {}", others.join(" ")), th.fg(p.dim)),
             ]);
             ListItem::new(line)
         })
@@ -370,63 +453,218 @@ fn render_tool_list(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         Some(i) => format!(" {}/{} ", i + 1, visible.len()),
         None => format!(" 0/{} ", visible.len()),
     };
-    let mut title = vec![Span::styled(" tools ", th.strong(p.accent))];
+    let mut title = vec![Span::styled(
+        format!(" {} ", tab.label()),
+        th.strong(p.accent),
+    )];
     if !app.filter.trim().is_empty() {
         title.push(Span::styled(
-            format!(
-                "/ {} ({} of {}) ",
-                app.filter.trim(),
-                visible.len(),
-                app.tools.len()
-            ),
+            format!("/ {} ", app.filter.trim()),
             th.fg(p.warn),
         ));
     }
-    let list =
-        List::new(items)
-            .block(th.block(p.border).title(Line::from(title)).title_bottom(
-                Line::from(Span::styled(pos, th.fg(p.dim))).alignment(Alignment::Right),
-            ))
-            .highlight_style(th.emph(Style::default().bg(p.accent).fg(p.ink)))
-            .highlight_symbol(g.pointer);
+    let block = th
+        .block(p.border)
+        .title(Line::from(title))
+        .title_bottom(Line::from(Span::styled(pos, th.fg(p.dim))).alignment(Alignment::Right));
+
+    if items.is_empty() {
+        // say where the matches are instead of showing an empty box
+        let elsewhere = app.visible_in(&CatTab::All).len();
+        let mut lines = vec![Line::from(Span::styled(
+            format!("nothing in {} matches", tab.label()),
+            th.fg(p.dim).add_modifier(Modifier::ITALIC),
+        ))];
+        if !app.filter.trim().is_empty() && elsewhere > 0 {
+            lines.push(Line::from(Span::styled(
+                format!("{elsewhere} match(es) in All · ← → to look"),
+                th.fg(p.info),
+            )));
+        } else if matches!(tab, CatTab::Installed) {
+            lines.push(Line::from(Span::styled(
+                "pick a tool in another category and press i",
+                th.fg(p.info),
+            )));
+        }
+        f.render_widget(Paragraph::new(lines).block(block), area);
+        return;
+    }
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(th.emph(Style::default().bg(p.accent).fg(p.ink)))
+        .highlight_symbol(g.pointer);
 
     let mut state = ListState::default();
     state.select(sel_pos);
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn render_output(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
+/// What the highlighted tool is: its categories (main one first), whether
+/// it's installed, how it runs, and what it does.
+fn render_tool_card(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
+    if area.height == 0 {
+        return;
+    }
     let p = &th.pal;
-    let tool = &app.tools[app.selected];
+    let g = th.glyph;
+    let t = &app.tools[app.selected];
+    let mut cats = Vec::new();
+    for (k, c) in t.categories.iter().enumerate() {
+        if k > 0 {
+            cats.push(Span::styled(" · ", th.fg(p.dim)));
+        }
+        let label = registry::category_label(c);
+        cats.push(if k == 0 {
+            Span::styled(label, th.strong(p.accent))
+        } else {
+            Span::styled(label, th.fg(p.fg))
+        });
+    }
+    let (icon, color, state) = match app.status[app.selected] {
+        ToolStatus::Installed => (g.installed, p.ok, "installed"),
+        ToolStatus::Missing => (g.missing, p.err, "not installed · i installs"),
+        ToolStatus::Unknown => (g.unknown, p.dim, "checking…"),
+        ToolStatus::Conflict => (g.conflict, p.warn, "name conflict on PATH"),
+    };
+    let how = match t.launch {
+        Launch::Stream => "runs in a terminal",
+        Launch::Gui => "desktop app",
+        Launch::Web if t.run_cmd.trim().is_empty() => "opens in the browser",
+        Launch::Web => "server + browser",
+        Launch::Dataset => "wordlist data",
+    };
+    let lines = vec![
+        Line::from(cats),
+        Line::from(vec![
+            Span::styled(format!("{icon} "), th.fg(color)),
+            Span::styled(state, th.fg(color)),
+            Span::styled(format!(" · {how}"), th.fg(p.dim)),
+        ]),
+        Line::from(Span::styled(t.description.clone(), th.fg(p.fg))),
+    ];
+    let block = th
+        .block(p.border)
+        .title(Span::styled(format!(" {} ", t.name), th.strong(p.fg)));
+    f.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(ratatui::widgets::Wrap { trim: true }),
+        area,
+    );
+}
 
-    let title = Line::from(vec![
-        Span::styled(format!(" {} ", tool.name), th.strong(p.accent)),
-        Span::styled(format!("· {} ", tool.description), th.fg(p.dim)),
-    ]);
+/// `0 console  1 nmap ⠋  2 ffuf ✓•  3 free  4 free`
+fn render_terminal_tabs(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
+    let p = &th.pal;
+    let g = th.glyph;
+    let spin = g.spinner;
+    let frame = spin[(app.tick / 2 % spin.len() as u64) as usize];
+    let mut spans = Vec::new();
+    for pos in 0..=SLOTS {
+        let sess = app.session(pos);
+        let label = match sess {
+            Some(s) => format!(" {pos} {} ", s.title),
+            None => format!(" {pos} free "),
+        };
+        let style = if pos == app.focus {
+            th.emph(Style::default().fg(p.ink).bg(p.accent))
+        } else if sess.is_some() {
+            th.fg(p.fg)
+        } else {
+            th.fg(p.dim)
+        };
+        spans.push(Span::styled(label, style));
+        if let Some(s) = sess {
+            match s.state {
+                RunState::Running => spans.push(Span::styled(frame, th.fg(p.warn))),
+                RunState::Idle => {}
+                _ if s.failed() => spans.push(Span::styled(g.failed, th.fg(p.err))),
+                _ => spans.push(Span::styled(g.done, th.fg(p.ok))),
+            }
+            if s.unread {
+                spans.push(Span::styled(g.unread, th.strong(p.info)));
+            }
+        }
+        spans.push(Span::raw(" "));
+    }
+    if !app.grid && app.slots.iter().filter(|s| s.is_some()).count() > 1 {
+        spans.push(Span::styled("g grid", th.fg(p.dim)));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn render_terminals(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
+    if !app.grid {
+        render_session(f, app, th, area, app.focus, false);
+        return;
+    }
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+    for (r, row) in rows.iter().enumerate() {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(*row);
+        for (c, cell) in cols.iter().enumerate() {
+            render_session(f, app, th, *cell, 1 + r * 2 + c, true);
+        }
+    }
+}
+
+/// One terminal (or an empty slot) at position `pos`.
+fn render_session(f: &mut Frame, app: &App, th: &Theme, area: Rect, pos: usize, grid: bool) {
+    let p = &th.pal;
+    let focused = pos == app.focus;
+    let Some(s) = app.session(pos) else {
+        let block = th
+            .block(if grid && focused { p.accent } else { p.border })
+            .title(Span::styled(format!(" {pos} free "), th.fg(p.dim)));
+        let text = vec![
+            Line::from(Span::styled(
+                "no tool here yet",
+                th.fg(p.dim).add_modifier(Modifier::ITALIC),
+            )),
+            Line::from(Span::styled(
+                "pick a tool on the left and press Enter",
+                th.fg(p.border),
+            )),
+        ];
+        f.render_widget(Paragraph::new(text).block(block), area);
+        return;
+    };
+
+    let mut title = vec![Span::styled(
+        if pos == 0 {
+            " console ".to_string()
+        } else {
+            format!(" {pos} {} ", s.title)
+        },
+        th.strong(p.accent),
+    )];
+    if !s.subtitle.is_empty() {
+        title.push(Span::styled(format!("· {} ", s.subtitle), th.fg(p.dim)));
+    }
 
     // Lines are hard-wrapped here (not by Paragraph) so we know exactly how
     // many rows the tail takes: with word-wrap, long lines used to push the
     // newest output below the pane.
     let inner_height = area.height.saturating_sub(2) as usize;
     let inner_width = area.width.saturating_sub(2) as usize;
-    let (rows, max_scroll) = visible_rows(&app.output, inner_width, inner_height, app.scroll);
-    app.view.set((inner_height, max_scroll, inner_width));
-    let text: Vec<Line> = if app.output.is_empty() {
-        vec![
-            Line::from(Span::styled(
-                "no output yet".to_string(),
-                th.fg(p.dim).add_modifier(Modifier::ITALIC),
-            )),
-            Line::from(Span::styled(
-                "press Enter to run · i to install".to_string(),
-                th.fg(p.border),
-            )),
-        ]
+    let (rows, max_scroll) = visible_rows(&s.output, inner_width, inner_height, s.scroll);
+    s.view.set((inner_height, max_scroll, inner_width));
+    let text: Vec<Line> = if s.output.is_empty() {
+        vec![Line::from(Span::styled(
+            "no output yet",
+            th.fg(p.dim).add_modifier(Modifier::ITALIC),
+        ))]
     } else {
         rows.into_iter()
             .map(|(i, chunk)| {
-                let mut style = line_style(th, &app.output[i]);
-                if app.search_hit == Some(i) {
+                let mut style = line_style(th, &s.output[i]);
+                if s.search_hit == Some(i) {
                     style = th.emph(style.bg(p.hit_bg));
                 }
                 Line::from(Span::styled(chunk, style))
@@ -434,31 +672,57 @@ fn render_output(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             .collect()
     };
 
-    let mut bottom = if app.running {
-        let spin = th.glyph.spinner;
-        let frame = spin[(app.tick / 2 % spin.len() as u64) as usize];
-        let pid = app
-            .running_pid
-            .map(|p| format!("pid {p} "))
-            .unwrap_or_default();
-        Line::from(vec![
-            Span::styled(format!(" {frame} running "), th.strong(p.warn)),
-            Span::styled(pid, th.fg(p.dim)),
-        ])
-    } else {
-        Line::from(Span::styled(" idle ", th.fg(p.dim)))
-    };
-    if app.scroll > 0 {
+    let mut bottom = state_line(app, th, s);
+    if s.scroll > 0 {
         bottom.push_span(Span::styled(
-            format!(" ↑ {} rows up · End to follow ", app.scroll.min(max_scroll)),
+            format!(" ↑ {} rows up · End to follow ", s.scroll.min(max_scroll)),
             th.fg(p.info),
         ));
     }
+    let border = if s.running() {
+        p.warn
+    } else if grid && focused {
+        p.accent
+    } else {
+        p.border
+    };
+    let mut block = th.block(border).title(title).title_bottom(bottom);
+    if focused && pos > 0 && !grid {
+        let hint = if s.running() {
+            " s input · c stop · x close "
+        } else {
+            " x close "
+        };
+        block = block
+            .title_bottom(Line::from(Span::styled(hint, th.fg(p.dim))).alignment(Alignment::Right));
+    }
+    f.render_widget(Paragraph::new(text).block(block), area);
+}
 
-    let border_color = if app.running { p.warn } else { p.border };
-
-    let para = Paragraph::new(text).block(th.block(border_color).title(title).title_bottom(bottom));
-    f.render_widget(para, area);
+/// Bottom-left of a terminal: what its process is doing.
+fn state_line(app: &App, th: &Theme, s: &Session) -> Line<'static> {
+    let p = &th.pal;
+    match s.state {
+        RunState::Running => {
+            let spin = th.glyph.spinner;
+            let frame = spin[(app.tick / 2 % spin.len() as u64) as usize];
+            let pid = s.pid.map(|p| format!("pid {p} ")).unwrap_or_default();
+            Line::from(vec![
+                Span::styled(format!(" {frame} running "), th.strong(p.warn)),
+                Span::styled(pid, th.fg(p.dim)),
+            ])
+        }
+        RunState::Idle => Line::from(Span::styled(" idle ", th.fg(p.dim))),
+        RunState::Killed => Line::from(Span::styled(" stopped ", th.fg(p.err))),
+        RunState::Exited(code) => {
+            let text = match code {
+                Some(c) => format!(" exit {c} "),
+                None => " ended ".to_string(),
+            };
+            let c = if s.failed() { p.err } else { p.ok };
+            Line::from(Span::styled(text, th.fg(c)))
+        }
+    }
 }
 
 /// Hard-wrap `output` to `width` columns and return the `height` rows that
@@ -523,6 +787,26 @@ fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
     let p = &th.pal;
     let arrow = th.glyph.arrow;
     let content = match app.mode {
+        Mode::SlotPick => {
+            let mut spans = vec![
+                Span::styled(
+                    format!(" all {SLOTS} terminals busy {arrow} "),
+                    th.emph(Style::default().fg(p.ink).bg(p.warn)),
+                ),
+                Span::raw(" "),
+            ];
+            for pos in 1..=SLOTS {
+                if let Some(s) = app.session(pos) {
+                    spans.push(Span::styled(format!("{pos}"), th.strong(p.accent)));
+                    spans.push(Span::styled(format!(" {}  ", s.title), th.fg(p.fg)));
+                }
+            }
+            spans.push(Span::styled(
+                "press a number to stop that tool and use its terminal · Esc cancel",
+                th.fg(p.dim),
+            ));
+            Line::from(spans)
+        }
         Mode::Input | Mode::HashInput | Mode::StdinInput | Mode::Filter | Mode::Search => {
             let (name, help) = match app.mode {
                 Mode::HashInput => ("hash", "  Enter identify · Esc cancel"),
@@ -564,19 +848,24 @@ fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             Line::from(vec![
                 Span::styled(
                     format!(" {} ", app.status_line),
-                    th.emph(Style::default().fg(p.ink).bg(p.accent)),
+                    // a pending "press again" stands out
+                    th.emph(Style::default().fg(p.ink).bg(if app.confirm.is_some() {
+                        p.err
+                    } else {
+                        p.accent
+                    })),
                 ),
                 Span::raw("  "),
-                key("↑/↓"),
-                sep(" move · "),
                 key("Enter"),
                 sep(" run · "),
                 key("i"),
                 sep(" install · "),
+                key("←→"),
+                sep(" category · "),
                 key("/"),
                 sep(" filter · "),
-                key("c"),
-                sep(" cancel · "),
+                key("0-4"),
+                sep(" terminals · "),
                 key("t"),
                 sep(" theme · "),
                 Span::styled("?", th.strong(p.accent)),
@@ -701,7 +990,7 @@ mod tests {
         a.filter = "reversing".into();
         let vis = a.visible();
         assert!(vis.len() > 3);
-        assert!(vis.iter().all(|&i| a.tools[i].category == "reversing"));
+        assert!(vis.iter().all(|&i| a.tools[i].in_category("reversing")));
         // words AND together, across name/category/description
         a.filter = "web brute".into();
         let names: Vec<&str> = a
@@ -736,6 +1025,104 @@ mod tests {
         ] {
             assert!(screen.contains(k), "help is missing {k:?}");
         }
+    }
+
+    fn screen(t: &Terminal<TestBackend>, h: u16) -> String {
+        (0..h).map(|y| row(t, y)).collect::<Vec<_>>().join("\n")
+    }
+
+    /// A terminal in slot `slot` with no real process behind it.
+    fn put(a: &mut App, slot: usize, name: &str, out: &[&str], state: RunState) {
+        let mut s = Session::new(100 + slot as u64, name, "desc");
+        for l in out {
+            s.push(*l);
+        }
+        s.state = state;
+        a.slots[slot] = Some(s);
+    }
+
+    #[test]
+    fn category_bar_list_and_card() {
+        let mut a = app();
+        let t = draw(&a, 140, 40);
+        let sc = screen(&t, 40);
+        assert!(sc.contains("All 45"), "{sc}");
+        assert!(sc.contains("OSINT"), "{sc}");
+        // the card names the selected tool's main category
+        let first = &a.tools[a.selected];
+        assert!(sc.contains(&registry::category_label(first.primary())));
+        // the active tab scrolls into view even on a narrow screen
+        a.cat = a.cat_tabs.len() - 1;
+        let t = draw(&a, 80, 24);
+        assert!(row(&t, 1).contains("Wordlists"), "{}", row(&t, 1));
+        // an empty category under a filter says where the matches are
+        a.cat = a
+            .cat_tabs
+            .iter()
+            .position(|t| t.label() == "Stego")
+            .unwrap();
+        a.filter = "nmap".into();
+        let t = draw(&a, 120, 30);
+        assert!(screen(&t, 30).contains("in All"));
+    }
+
+    #[test]
+    fn terminals_tabs_single_and_grid() {
+        let mut a = app();
+        put(
+            &mut a,
+            0,
+            "nmap",
+            &["22/tcp open"],
+            RunState::Exited(Some(0)),
+        );
+        put(&mut a, 2, "ffuf", &["[err] boom"], RunState::Killed);
+        a.slots[2].as_mut().unwrap().unread = true;
+        a.focus = 1;
+        let t = draw(&a, 140, 30);
+        let sc = screen(&t, 30);
+        for k in [
+            "0 console",
+            "1 nmap",
+            "3 ffuf",
+            "4 free",
+            "22/tcp open",
+            "exit 0",
+            "x close",
+        ] {
+            assert!(sc.contains(k), "missing {k:?}:\n{sc}");
+        }
+        assert!(
+            sc.contains('✓') && sc.contains('✗') && sc.contains('•'),
+            "{sc}"
+        );
+        a.grid = true;
+        let t = draw(&a, 140, 30);
+        let sc = screen(&t, 30);
+        for k in ["22/tcp open", "[err] boom", "2 free", "stopped"] {
+            assert!(sc.contains(k), "grid missing {k:?}:\n{sc}");
+        }
+        for (w, h) in [(80, 24), (40, 10), (10, 4)] {
+            draw(&a, w, h);
+        }
+    }
+
+    #[test]
+    fn slot_pick_footer_and_confirm() {
+        let mut a = app();
+        for i in 0..SLOTS {
+            put(&mut a, i, &format!("t{i}"), &[], RunState::Running);
+        }
+        a.mode = Mode::SlotPick;
+        let t = draw(&a, 160, 20);
+        let footer = row(&t, 19);
+        assert!(
+            footer.contains("terminals busy") && footer.contains("Esc cancel"),
+            "{footer}"
+        );
+        a.mode = Mode::Browsing;
+        a.confirm = Some(crate::app::Confirm::Quit);
+        draw(&a, 100, 20);
     }
 
     #[test]

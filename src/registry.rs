@@ -39,8 +39,13 @@ pub enum Launch {
 #[derive(Debug, Deserialize, Clone)]
 pub struct Tool {
     pub name: String,
+    /// Legacy single-category form; folded into `categories` by `parse`.
     #[serde(default)]
-    pub category: String,
+    category: Option<String>,
+    /// Every category the tool is useful in, primary first. A tool shows up
+    /// under each of them in the dashboard.
+    #[serde(default)]
+    pub categories: Vec<String>,
     #[serde(default)]
     pub description: String,
     /// Executable name used to detect installation (PATH probe).
@@ -88,9 +93,33 @@ pub struct Verify {
 }
 
 impl Tool {
+    /// The tool's main category (the first listed), or "other".
+    pub fn primary(&self) -> &str {
+        self.categories.first().map_or("other", String::as_str)
+    }
+
+    pub fn in_category(&self, id: &str) -> bool {
+        self.categories.iter().any(|c| c == id) || (id == "other" && self.categories.is_empty())
+    }
+
+    /// Fold the legacy `category:` into `categories`, lowercased, no repeats.
+    fn normalize_categories(&mut self) {
+        let mut all: Vec<String> = self.category.take().into_iter().collect();
+        all.append(&mut self.categories);
+        for c in all {
+            let c = c.trim().to_lowercase();
+            if !c.is_empty() && !self.categories.contains(&c) {
+                self.categories.push(c);
+            }
+        }
+    }
+
     /// Problems that make this entry unusable, if any.
     fn problems(&self) -> Vec<String> {
         let mut p = Vec::new();
+        if self.category.is_some() && !self.categories.is_empty() {
+            p.push("use either `category:` or `categories:`, not both".into());
+        }
         let missing = |f: &Option<String>| f.as_deref().is_none_or(|s| s.trim().is_empty());
         match self.install {
             Install::Scoop if missing(&self.scoop) => {
@@ -174,6 +203,106 @@ impl Tool {
         self.url = self.url.as_deref().map(expand);
         self.args_hint = self.args_hint.as_deref().map(expand);
     }
+}
+
+/// One entry of the category taxonomy.
+pub struct Category {
+    pub id: &'static str,
+    pub label: &'static str,
+    /// What belongs here, shown when the category is selected.
+    pub blurb: &'static str,
+}
+
+/// The categories the dashboard knows, in the order of a typical engagement
+/// (find targets, then attack, then analyse). Tools may use other ids too;
+/// those are listed after these, alphabetically.
+pub const CATEGORIES: &[Category] = &[
+    Category {
+        id: "osint",
+        label: "OSINT",
+        blurb: "people, emails, usernames, public footprint",
+    },
+    Category {
+        id: "recon",
+        label: "Recon",
+        blurb: "subdomains, hosts, URLs and content discovery",
+    },
+    Category {
+        id: "network",
+        label: "Network",
+        blurb: "port scans, services, traffic and AD/SMB",
+    },
+    Category {
+        id: "web",
+        label: "Web",
+        blurb: "fuzzing, crawling, scanning and web vulns",
+    },
+    Category {
+        id: "exploit",
+        label: "Exploit",
+        blurb: "turn a finding into access",
+    },
+    Category {
+        id: "passwords",
+        label: "Passwords",
+        blurb: "hash identification and cracking, credentials",
+    },
+    Category {
+        id: "reversing",
+        label: "Reversing",
+        blurb: "disassemble, decompile, unpack, debug",
+    },
+    Category {
+        id: "pwn",
+        label: "Pwn",
+        blurb: "binary exploitation: ROP, exploit scripting",
+    },
+    Category {
+        id: "mobile",
+        label: "Mobile",
+        blurb: "Android apps: decompile and rebuild APKs",
+    },
+    Category {
+        id: "forensics",
+        label: "Forensics",
+        blurb: "disk, memory, metadata and file analysis",
+    },
+    Category {
+        id: "crypto",
+        label: "Crypto",
+        blurb: "encodings, ciphers, RSA and TLS",
+    },
+    Category {
+        id: "stego",
+        label: "Stego",
+        blurb: "data hidden in images and audio",
+    },
+    Category {
+        id: "wordlists",
+        label: "Wordlists",
+        blurb: "data the other tools feed on",
+    },
+];
+
+/// Display label for a category id (unknown ids are shown capitalised).
+pub fn category_label(id: &str) -> String {
+    match CATEGORIES.iter().find(|c| c.id == id) {
+        Some(c) => c.label.to_string(),
+        None => {
+            let mut ch = id.chars();
+            ch.next()
+                .map(|f| f.to_uppercase().chain(ch).collect())
+                .unwrap_or_default()
+        }
+    }
+}
+
+/// Sort key for a category id: taxonomy order, unknown ids after.
+pub fn category_rank(id: &str) -> usize {
+    CATEGORIES
+        .iter()
+        .position(|c| c.id == id)
+        .unwrap_or(CATEGORIES.len())
 }
 
 /// Placeholder for a Scoop app's install directory, for files Scoop doesn't
@@ -280,7 +409,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Catalog> {
 
 /// Parse and validate catalog text.
 pub fn parse(text: &str) -> Result<Catalog> {
-    let cat: Catalog = serde_yaml::from_str(text).context("parsing tools.yaml")?;
+    let mut cat: Catalog = serde_yaml::from_str(text).context("parsing tools.yaml")?;
     let errors: Vec<String> = cat
         .tools
         .iter()
@@ -292,6 +421,9 @@ pub fn parse(text: &str) -> Result<Catalog> {
         .collect();
     if !errors.is_empty() {
         anyhow::bail!("invalid tool entries:\n{}", errors.join("\n"));
+    }
+    for t in &mut cat.tools {
+        t.normalize_categories();
     }
     Ok(cat)
 }
@@ -439,6 +571,55 @@ mod tests {
             argv.contains(&r"C:\s\apps\seclists-lite\current\common.txt".to_string()),
             "{argv:?}"
         );
+    }
+
+    #[test]
+    fn categories_list_and_legacy_form() {
+        let c = parse(
+            "tools:
+               - {name: a, exe: a, scoop: a, run_cmd: a, categories: [Network, recon, network]}
+               - {name: b, exe: b, scoop: b, run_cmd: b, category: web}
+               - {name: c, exe: c, scoop: c, run_cmd: c}
+",
+        )
+        .unwrap();
+        assert_eq!(c.tools[0].categories, ["network", "recon"]); // lowercased, deduped
+        assert_eq!(c.tools[0].primary(), "network");
+        assert!(c.tools[0].in_category("recon"));
+        assert_eq!(c.tools[1].categories, ["web"]);
+        assert_eq!(c.tools[2].primary(), "other");
+        assert!(c.tools[2].in_category("other"));
+        assert!(parse(
+            "tools:
+  - {name: a, exe: a, scoop: a, run_cmd: a, category: web, categories: [web]}
+"
+        )
+        .is_err());
+        assert_eq!(category_label("osint"), "OSINT");
+        assert_eq!(category_label("radio"), "Radio");
+    }
+
+    #[test]
+    fn shipped_catalog_uses_known_categories() {
+        let c = parse(include_str!("../tools.yaml")).unwrap();
+        for t in &c.tools {
+            assert!(!t.categories.is_empty(), "{} has no category", t.name);
+            for cat in &t.categories {
+                assert!(
+                    CATEGORIES.iter().any(|k| k.id == cat),
+                    "{}: unknown category {cat:?} (typo, or add it to CATEGORIES)",
+                    t.name
+                );
+            }
+        }
+        // every known category is used, so no empty tab shows up
+        for k in CATEGORIES {
+            assert!(
+                c.tools.iter().any(|t| t.in_category(k.id)),
+                "no tool in {}",
+                k.id
+            );
+        }
     }
 
     #[test]
