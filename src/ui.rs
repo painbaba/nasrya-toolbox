@@ -42,6 +42,82 @@ pub fn render(f: &mut Frame, app: &App) {
     render_tool_list(f, app, body[0]);
     render_output(f, app, body[1]);
     render_footer(f, app, chunks[2]);
+    if app.show_help {
+        render_help(f, area);
+    }
+}
+
+/// Every key binding, shown by `?`.
+pub const HELP: &[(&str, &str)] = &[
+    ("↑ ↓  j k", "move in the tool list"),
+    ("/", "filter tools by name / category / description"),
+    (
+        "Enter",
+        "run the tool (edit args first) · on a dataset: list it",
+    ),
+    (
+        "Enter (running)",
+        "send a line to the tool's input · Ctrl+D = EOF",
+    ),
+    ("i", "install the selected tool (scoop / pipx)"),
+    ("c", "cancel the running process (whole tree)"),
+    ("r", "re-detect installed tools (picks up PATH changes)"),
+    ("PgUp PgDn", "scroll the output · Home top · End follow"),
+    ("f  n  N", "find in the output · older / newer match"),
+    ("h", "identify a hash (built in)"),
+    ("?", "this help"),
+    ("q  Esc", "quit"),
+    ("", ""),
+    (
+        "in prompts",
+        "← → Home End · Ctrl+← → words · Ctrl+W / Ctrl+U delete · ↑ ↓ history",
+    ),
+];
+
+fn render_help(f: &mut Frame, area: Rect) {
+    let key_w = HELP
+        .iter()
+        .map(|(k, _)| k.chars().count())
+        .max()
+        .unwrap_or(0);
+    let lines: Vec<Line> = HELP
+        .iter()
+        .map(|(k, d)| {
+            Line::from(vec![
+                Span::styled(
+                    format!(" {k:<key_w$}  "),
+                    Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(d.to_string(), Style::default().fg(FG)),
+            ])
+        })
+        .collect();
+    let w = (lines.iter().map(|l| l.width()).max().unwrap_or(40) as u16 + 3).min(area.width);
+    let h = (lines.len() as u16 + 2).min(area.height);
+    let popup = Rect {
+        x: area.x + area.width.saturating_sub(w) / 2,
+        y: area.y + area.height.saturating_sub(h) / 2,
+        width: w,
+        height: h,
+    };
+    f.render_widget(ratatui::widgets::Clear, popup);
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(CYAN))
+                .title(Span::styled(
+                    " keys ",
+                    Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+                ))
+                .title_bottom(
+                    Line::from(Span::styled(" any key to close ", Style::default().fg(DIM)))
+                        .alignment(Alignment::Right),
+                ),
+        ),
+        popup,
+    );
 }
 
 fn render_header(f: &mut Frame, app: &App, area: Rect) {
@@ -343,20 +419,16 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
             Span::styled("  ", Style::default()),
             Span::styled("↑/↓", Style::default().fg(CYAN)),
             Span::styled(" move · ", Style::default().fg(DIM)),
-            Span::styled("/", Style::default().fg(CYAN)),
-            Span::styled(" filter · ", Style::default().fg(DIM)),
-            Span::styled("f", Style::default().fg(CYAN)),
-            Span::styled(" find · ", Style::default().fg(DIM)),
             Span::styled("Enter", Style::default().fg(CYAN)),
             Span::styled(" run · ", Style::default().fg(DIM)),
             Span::styled("i", Style::default().fg(CYAN)),
             Span::styled(" install · ", Style::default().fg(DIM)),
-            Span::styled("r", Style::default().fg(CYAN)),
-            Span::styled(" re-detect · ", Style::default().fg(DIM)),
+            Span::styled("/", Style::default().fg(CYAN)),
+            Span::styled(" filter · ", Style::default().fg(DIM)),
             Span::styled("c", Style::default().fg(CYAN)),
             Span::styled(" cancel · ", Style::default().fg(DIM)),
-            Span::styled("h", Style::default().fg(CYAN)),
-            Span::styled(" hash id · ", Style::default().fg(DIM)),
+            Span::styled("?", Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
+            Span::styled(" all keys · ", Style::default().fg(DIM)),
             Span::styled("q", Style::default().fg(CYAN)),
             Span::styled(" quit", Style::default().fg(DIM)),
         ]),
@@ -491,6 +563,26 @@ mod tests {
         a.filter = "zzz-no-match".into();
         assert!(a.visible().is_empty());
         draw(&a, 100, 20);
+    }
+
+    #[test]
+    fn help_overlay_renders_and_lists_every_browsing_key() {
+        let mut a = app();
+        a.show_help = true;
+        for (w, h) in [(100, 30), (40, 10)] {
+            draw(&a, w, h);
+        }
+        let t = draw(&a, 120, 30);
+        let screen: String = (0..30).map(|y| row(&t, y)).collect::<Vec<_>>().join("\n");
+        for k in [
+            "filter",
+            "install",
+            "find in the output",
+            "identify a hash",
+            "any key to close",
+        ] {
+            assert!(screen.contains(k), "help is missing {k:?}");
+        }
     }
 
     #[test]

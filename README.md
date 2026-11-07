@@ -128,6 +128,7 @@ pass `--catalog .\tools.yaml` to use it on purpose. The active path is shown in 
 | `f` | find text in the output (`n` = older match, `N` = newer; the match is highlighted) |
 | `c` | cancel the running process |
 | `h` | identify a hash (built in, works offline) |
+| `?` | show all keys |
 | `q` | quit |
 
 **Logs:** every tool run and install is also written to

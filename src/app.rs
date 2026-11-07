@@ -80,6 +80,8 @@ pub struct App {
     proc_stdin: Option<std::process::ChildStdin>,
     pub status_line: String,
     pub tick: u64,
+    /// The '?' key overlay is open.
+    pub show_help: bool,
     /// A background detection pass is in flight.
     detecting: bool,
     /// The running process is a scoop install (so re-detect when it exits).
@@ -128,6 +130,7 @@ impl App {
             log: None,
             status_line: "detecting tools…".into(),
             tick: 0,
+            show_help: false,
             detecting: false,
             installing: false,
             screen: Screen::Splash,
@@ -272,6 +275,11 @@ impl App {
     }
 
     fn on_key(&mut self, key: KeyEvent) {
+        if self.show_help {
+            // any key closes the overlay
+            self.show_help = false;
+            return;
+        }
         match self.mode {
             Mode::Browsing => self.on_key_browsing(key.code),
             Mode::Input | Mode::HashInput | Mode::StdinInput | Mode::Filter | Mode::Search => {
@@ -298,6 +306,7 @@ impl App {
             KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+            KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char('f') => {
                 self.editor.set(&self.search.clone());
                 self.mode = Mode::Search;
