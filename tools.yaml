@@ -324,3 +324,13 @@ tools:
     scoop: sleuthkit
     run_cmd: fls
     args_hint: "-r -o 2048 image.dd"
+
+  - name: detect-it-easy
+    category: reversing
+    description: Identify packers / compilers / file types (DIE console)
+    exe: diec
+    scoop: detect-it-easy
+    bucket: extras
+    run_cmd: diec
+    args_hint: "binary.exe"
+    note: this runs the console version (diec); the GUI is 'die', also on PATH
