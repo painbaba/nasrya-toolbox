@@ -11,9 +11,9 @@ No WSL. No VM. No guesswork about what actually works on Windows.
 
 <br>
 
-<a href="https://tahabenissa.github.io/nasrya-toolbox/"><img src="https://img.shields.io/badge/Website-5eff88?style=for-the-badge&logo=googlechrome&logoColor=050c0d" alt="Website" height="36"></a>&nbsp;
-<a href="https://tahabenissa.github.io/nasrya-toolbox/docs/"><img src="https://img.shields.io/badge/Docs-0e1f22?style=for-the-badge&logo=readthedocs&logoColor=5eff88" alt="Docs" height="36"></a>&nbsp;
-<a href="https://tahabenissa.github.io/nasrya-toolbox/demo/"><img src="https://img.shields.io/badge/Live%20demo-0e1f22?style=for-the-badge&logo=gnubash&logoColor=5eff88" alt="Live demo" height="36"></a>
+<a href="https://tahabenissa.github.io/nasrya-toolbox/"><img src="https://img.shields.io/badge/Website-89c2d2?style=for-the-badge&logo=googlechrome&logoColor=0c191d" alt="Website" height="36"></a>&nbsp;
+<a href="https://tahabenissa.github.io/nasrya-toolbox/docs/"><img src="https://img.shields.io/badge/Docs-232831?style=for-the-badge&logo=readthedocs&logoColor=89c2d2" alt="Docs" height="36"></a>&nbsp;
+<a href="https://tahabenissa.github.io/nasrya-toolbox/demo/"><img src="https://img.shields.io/badge/Live%20demo-232831?style=for-the-badge&logo=gnubash&logoColor=89c2d2" alt="Live demo" height="36"></a>
 
 <br>
 
@@ -236,7 +236,7 @@ puts the old look back.
 
 | Setting | Options |
 |---|---|
-| Theme | The same set as Claude Code's `/theme`: dark, light, colour-blind-friendly dark / light, ANSI-only dark / light. Plus *Winsploit classic* (the original cyan). `1`–`7` pick one directly. |
+| Theme | *Winsploit Frost* (the default: slate and icy blue, the same look as the web view and the logo). Then the same set as Claude Code's `/theme`: dark, light, colour-blind-friendly dark / light, ANSI-only dark / light. Plus *Winsploit classic* (the original cyan). `1`–`8` pick one directly. |
 | Borders | rounded `╭─╮` · plain `┌─┐` · double `╔═╗` · thick `┏━┓` · ascii `+-+` |
 | Glyphs | unicode `● ○ ◐ ⠋ ▸` · ascii `* o ~ \| >` (for console fonts without those characters) |
 | Bold text | on · off |
@@ -249,7 +249,7 @@ Windows console, set borders and glyphs to *ascii*. The file can also be edited
 by hand; missing keys keep their defaults:
 
 ```yaml
-theme: dark            # light, dark-daltonized, light-daltonized, dark-ansi, light-ansi, cyan
+theme: frost           # dark, light, dark-daltonized, light-daltonized, dark-ansi, light-ansi, cyan
 borders: rounded       # plain, double, thick, ascii
 glyphs: unicode        # ascii
 bold: true
@@ -377,6 +377,9 @@ every field.
     run_cmd: gobuster      # command actually launched
     args_hint: 'dir -u https://example.com -w "{app:seclists-lite}\common.txt"'
     bucket: security       # optional; main-bucket tools omit it
+    options:               # optional; the web view's command helper suggests and explains these
+      - { flag: dir, help: 'brute-force paths on a web server' }
+      - { flag: '-w', arg: '<wordlist>', help: 'the wordlist to try' }
 ```
 
 A bucket Scoop doesn't know by name also needs its URL in the top-level `buckets:` map, so Winsploit
@@ -552,6 +555,7 @@ node site/scripts/readme-banner.mjs   # regenerate .github/banner.svg (the READM
 <summary><b>Unreleased (since v0.1.0)</b></summary>
 
 **Appearance (`t`)**
+- *Winsploit Frost*, the default theme: the web view's palette and the Iso cube logo's colours.
 - Themes matching Claude Code's `/theme` (Claude terracotta accent, colour-blind and ANSI-only
   variants), with the original cyan kept as *Winsploit classic*.
 - Border style, ASCII glyphs for limited console fonts, bold on/off.

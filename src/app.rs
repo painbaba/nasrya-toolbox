@@ -1962,7 +1962,7 @@ impl App {
             KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' ') => {
                 self.settings.step(field, 1)
             }
-            // 1-7 pick a theme directly, as in Claude Code's /theme
+            // 1-8 pick a theme directly, as in Claude Code's /theme
             KeyCode::Char(c @ '1'..='9') => {
                 let i = c as usize - '1' as usize;
                 if let Some(t) = crate::theme::ThemeName::ALL.get(i) {

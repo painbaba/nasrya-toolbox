@@ -1055,8 +1055,10 @@ fn message_page(title: &str, text: &str) -> Vec<u8> {
     format!(
         "<!doctype html><html lang=en><head><meta charset=utf-8>\
          <meta name=viewport content=\"width=device-width, initial-scale=1\">\
-         <title>Winsploit</title><link rel=stylesheet href=/app.css></head>\
-         <body class=message><main><div class=mark>winsploit</div><h1>{title}</h1>\
+         <title>Winsploit</title><link rel=stylesheet href=/app.css>\
+         <link rel=icon href=/favicon.svg type=image/svg+xml></head>\
+         <body class=message><main><div class=mark>{LOGO}<span>winsploit</span></div>\
+         <h1>{title}</h1>\
          <p>{text}</p></main></body></html>"
     )
     .into_bytes()
@@ -1369,10 +1371,21 @@ fn join(conn: &mut Conn, req: &Request, ctx: &Ctx, peer: &Peer, who: &Access) ->
     }
 }
 
+/// The Iso cube in the fixed Frost colours (design/README.md): a tab icon
+/// can't read the page's CSS variables.
 const FAVICON: &str = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>\
-<rect width='32' height='32' rx='8' fill='#d77757'/>\
-<path d='M7 10l3.2 12 3-8 2.8 8 3.2-12' fill='none' stroke='#fff' stroke-width='2.6' \
-stroke-linecap='round' stroke-linejoin='round'/><circle cx='24' cy='21' r='2.2' fill='#fff'/></svg>";
+<path d='M16 2.5 28 9.3v13.4L16 29.5 4 22.7V9.3z' fill='#46A0B9'/>\
+<path d='M16 2.5 28 9.3 16 16 4 9.3z' fill='#BCDDE6'/>\
+<path d='M16 16 28 9.3v13.4L16 29.5z' fill='#89C2D2'/>\
+<path d='M10.5 8l3 1.6-3 1.7M15 11.5l3.2 1.8' fill='none' stroke='#0C191D' \
+stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/></svg>";
+
+/// The Iso cube for the message pages, coloured by app.css's `.logo` rules.
+const LOGO: &str = "<svg class=logo viewBox='0 0 32 32' aria-hidden=true>\
+<path class=d d='M16 2.5 28 9.3v13.4L16 29.5 4 22.7V9.3z'/>\
+<path class=t d='M16 2.5 28 9.3 16 16 4 9.3z'/>\
+<path class=r d='M16 16 28 9.3v13.4L16 29.5z'/>\
+<path class=k d='M10.5 8l3 1.6-3 1.7M15 11.5l3.2 1.8'/></svg>";
 
 /// The Host header must be `<address>:<our port>`, where the address is an
 /// IP literal or `localhost`: a DNS-rebinding page (evil.example resolving

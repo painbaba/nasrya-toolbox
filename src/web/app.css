@@ -213,10 +213,16 @@ kbd {
   color: var(--faint); font-size: 12.5px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px;
 }
-.logo { width: 28px; height: 28px; stroke: none; }
-.logo rect { fill: var(--accent); }
-.logo path { stroke: var(--accent-ink); stroke-width: 2.6; fill: none; }
-.logo circle { fill: var(--accent-ink); }
+/* the Iso cube (design/README.md): faces from the accent so it follows every
+   palette; the prompt stays dark, since the top face is light in both modes */
+.logo { width: 28px; height: 28px; flex: none; }
+.logo .d { fill: color-mix(in srgb, var(--accent) 62%, black); }
+.logo .t { fill: color-mix(in srgb, var(--accent) 70%, white); }
+.logo .r { fill: var(--accent); }
+.logo .k {
+  fill: none; stroke: hsl(var(--ah) 40% 8%); stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
+}
 .brand .name { font-weight: 700; font-size: 16px; letter-spacing: -.01em; }
 
 .stats { display: flex; gap: 14px; margin-left: 8px; color: var(--muted); font-size: 13px; }
@@ -768,8 +774,8 @@ body.message main {
   background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow);
 }
 body.message .mark {
-  display: inline-block; padding: 3px 10px; border-radius: 6px;
-  background: var(--accent); color: var(--accent-ink); font-weight: 700;
+  display: inline-flex; align-items: center; gap: 8px;
+  font-weight: 700; font-size: 17px; letter-spacing: -.01em;
 }
 body.message h1 { margin: 16px 0 8px; font-size: 20px; }
 body.message p { margin: 0; color: var(--muted); }

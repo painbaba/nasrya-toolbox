@@ -626,7 +626,7 @@ fn render_appearance(f: &mut Frame, app: &App, ap: &Appearance, th: &Theme, area
     let block = overlay_block(
         th,
         "appearance",
-        "↑↓ choose · ←→ change · 1-7 theme · Enter save · Esc cancel",
+        "↑↓ choose · ←→ change · 1-8 theme · Enter save · Esc cancel",
     );
     let inner = block.inner(popup);
     f.render_widget(block, popup);

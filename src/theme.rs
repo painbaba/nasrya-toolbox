@@ -2,9 +2,10 @@
 //! overlays are drawn. Picked live in the `t` overlay and saved to
 //! `%APPDATA%\winsploit\settings.yaml`.
 //!
-//! The themes follow Claude Code's `/theme` choices (dark, light, the
-//! colour-blind-friendly variants and the ANSI-only ones) so the two feel at
-//! home side by side in one terminal. The terminal still owns the actual
+//! The default, Frost, is winsploit's own look: the web view's palette and
+//! the Iso cube logo's colours. The others follow Claude Code's `/theme`
+//! choices (dark, light, the colour-blind-friendly variants and the ANSI-only
+//! ones) so the two feel at home side by side in one terminal. The terminal still owns the actual
 //! typeface; what we control is which glyphs we draw, the border line style
 //! and whether emphasis is bold.
 
@@ -19,7 +20,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ThemeName {
+    /// winsploit's own look: slate and icy blue, like the web view's default
     #[default]
+    Frost,
     Dark,
     Light,
     DarkDaltonized,
@@ -31,7 +34,8 @@ pub enum ThemeName {
 }
 
 impl ThemeName {
-    pub const ALL: [ThemeName; 7] = [
+    pub const ALL: [ThemeName; 8] = [
+        ThemeName::Frost,
         ThemeName::Dark,
         ThemeName::Light,
         ThemeName::DarkDaltonized,
@@ -43,6 +47,7 @@ impl ThemeName {
 
     pub fn label(self) -> &'static str {
         match self {
+            ThemeName::Frost => "Winsploit Frost",
             ThemeName::Dark => "Dark mode",
             ThemeName::Light => "Light mode",
             ThemeName::DarkDaltonized => "Dark mode (colour-blind friendly)",
@@ -341,6 +346,21 @@ impl Palette {
             gradient: Some([(226, 140, 100), (196, 98, 66), (120, 80, 170)]),
         };
         match name {
+            // the web view's Frost palette (src/web/app.css, dark mode) and
+            // the Iso cube logo's faces for the splash gradient
+            ThemeName::Frost => Palette {
+                accent: rgb(137, 194, 210),
+                border: rgb(73, 98, 110),
+                ok: rgb(92, 199, 119),
+                err: rgb(255, 122, 140),
+                warn: rgb(240, 185, 58),
+                info: rgb(177, 185, 249),
+                dim: rgb(132, 138, 148),
+                fg: rgb(233, 234, 237),
+                ink: rgb(12, 25, 29),
+                hit_bg: rgb(34, 69, 79),
+                gradient: Some([(188, 221, 230), (137, 194, 210), (70, 160, 185)]),
+            },
             ThemeName::Dark => dark,
             ThemeName::Light => light,
             // blue / red instead of green / red: distinguishable with
@@ -570,13 +590,26 @@ mod tests {
         s.step(Field::Theme, -1);
         assert_eq!(s.theme, ThemeName::Cyan);
         s.step(Field::Theme, 1);
-        assert_eq!(s.theme, ThemeName::Dark);
+        assert_eq!(s.theme, ThemeName::Frost);
         for _ in 0..ThemeName::ALL.len() {
             s.step(Field::Theme, 1);
         }
-        assert_eq!(s.theme, ThemeName::Dark);
+        assert_eq!(s.theme, ThemeName::Frost);
         s.step(Field::Bold, 1);
         assert!(!s.bold);
+    }
+
+    #[test]
+    fn frost_is_the_default_and_first() {
+        assert_eq!(Settings::default().theme, ThemeName::Frost);
+        assert_eq!(ThemeName::ALL[0], ThemeName::Frost);
+        let y = serde_yaml::to_string(&Settings::default()).unwrap();
+        assert!(y.contains("theme: frost"), "{y}");
+        // the splash gets the cube's three faces, light to dark
+        assert_eq!(
+            Palette::of(ThemeName::Frost).gradient,
+            Some([(188, 221, 230), (137, 194, 210), (70, 160, 185)])
+        );
     }
 
     #[test]

@@ -70,23 +70,23 @@ void main(){
   float g = .14;
   float sq = step(g, local.x) * step(g, local.y) * step(local.x, 1. - g) * step(local.y, 1. - g);
 
-  vec3 bg = vec3(.0196, .047, .051);           // #050c0d
-  vec3 l1 = vec3(.067, .145, .161);            // #112529
-  vec3 l2 = vec3(.157, .235, .251);            // #283c40
-  vec3 l3 = vec3(.082, .302, .196);            // #154d32
-  vec3 l4 = vec3(.369, 1., .533);              // #5eff88
+  vec3 bg = vec3(.082, .094, .118);           // #15181e
+  vec3 l1 = vec3(.137, .157, .192);            // #232831
+  vec3 l2 = vec3(.239, .271, .322);            // #3d4552
+  vec3 l3 = vec3(.133, .302, .349);            // #224d59
+  vec3 l4 = vec3(.537, .761, .824);            // #89c2d2
   vec3 col = q < .25 ? bg : q < .5 ? l1 : q < .75 ? l2 : q < 1. ? l3 : l4;
 
   // risk cells: rare, pulsing red
   float slot = floor(t * .55);
   float rk = hash(cell + slot * 1.37);
   float pulse = .5 + .5 * sin(t * 9.);
-  if (rk > .99935 && v > .08) col = mix(col, vec3(1., 0., .082), pulse);
+  if (rk > .99935 && v > .08) col = mix(col, vec3(1., .42, .502), pulse);
 
   vec3 outc = mix(bg, col, sq);
   // faint grid lines everywhere so the empty field still reads as a grid
   float line = (1. - step(.04, local.x)) + (1. - step(.04, local.y));
-  outc += vec3(.02, .05, .05) * clamp(line, 0., 1.) * .6;
+  outc += vec3(.04, .045, .055) * clamp(line, 0., 1.) * .6;
   gl_FragColor = vec4(outc, 1.);
 }`;
 
