@@ -651,7 +651,14 @@ impl App {
         if self.start_mode == StartMode::Web {
             self.start_web(true);
         }
+        let mut title = String::new();
         while !self.quit {
+            // the console title names the working folder (tabs tell apart)
+            let want = crate::shortcut::title_for(&self.cwd);
+            if want != title {
+                crate::shortcut::set_title(&want);
+                title = want;
+            }
             terminal.draw(|f| match self.screen {
                 Screen::Splash => {
                     banner::render_splash(f, self.tick, &self.settings.theme(), self.start_menu)
