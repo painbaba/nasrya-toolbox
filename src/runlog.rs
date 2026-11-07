@@ -26,7 +26,8 @@ pub struct RunLog {
 
 impl RunLog {
     /// Create `<dir>/<timestamp>-<name>.log` and write the header.
-    pub fn create(dir: &Path, name: &str, command: &str) -> std::io::Result<Self> {
+    /// `source` says where the run was started from (`terminal` or `web`).
+    pub fn create(dir: &Path, name: &str, command: &str, source: &str) -> std::io::Result<Self> {
         std::fs::create_dir_all(dir)?;
         let now = unix_now();
         let path = dir.join(format!("{}-{}.log", stamp_compact(now), sanitize(name)));
@@ -34,6 +35,7 @@ impl RunLog {
         writeln!(file, "# winsploit run log")?;
         writeln!(file, "# tool:    {name}")?;
         writeln!(file, "# command: {command}")?;
+        writeln!(file, "# source:  {source}")?;
         writeln!(file, "# started: {}", stamp_iso(now))?;
         writeln!(file)?;
         Ok(RunLog { path, file })
@@ -143,7 +145,7 @@ mod tests {
     #[test]
     fn writes_header_lines_and_footer() {
         let dir = std::env::temp_dir().join(format!("winsploit-log-test-{}", std::process::id()));
-        let mut log = RunLog::create(&dir, "nmap", "nmap -sV x").unwrap();
+        let mut log = RunLog::create(&dir, "nmap", "nmap -sV x", "web").unwrap();
         let path = log.path().to_path_buf();
         log.line("PORT STATE");
         log.line("[err] warning");
@@ -156,6 +158,7 @@ mod tests {
             .to_string_lossy()
             .ends_with("Z-nmap.log"));
         assert!(text.contains("# command: nmap -sV x"));
+        assert!(text.contains("# source:  web"));
         assert!(text.contains("\nPORT STATE\n[err] warning\n"));
         assert!(text.contains("# exit:    0"));
     }

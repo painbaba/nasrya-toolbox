@@ -6,6 +6,7 @@
 
 use std::cell::Cell;
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::ChildStdin;
 
 use crate::runlog::RunLog;
@@ -52,6 +53,12 @@ pub struct Session {
     /// When it finished (a counter, not a clock): the oldest finished
     /// terminal is the one reused when all slots are taken.
     pub ended: u64,
+    /// Lines ever pushed (unlike `output.len()`, never trimmed): the web
+    /// view sends what it hasn't seen yet.
+    pub seq: u64,
+    /// The run log of the last run here (kept after it's closed, so the web
+    /// view can offer it for download).
+    pub log_path: Option<PathBuf>,
 }
 
 impl Session {
@@ -71,6 +78,8 @@ impl Session {
             kill_requested: false,
             unread: false,
             ended: 0,
+            seq: 0,
+            log_path: None,
         }
     }
 
@@ -98,6 +107,7 @@ impl Session {
             self.scroll += 1;
         }
         self.output.push(line);
+        self.seq += 1;
         if self.output.len() > MAX_LINES {
             let excess = self.output.len() - MAX_LINES;
             self.output.drain(0..excess);
@@ -113,11 +123,13 @@ impl Session {
         self.push(line);
     }
 
-    /// Start this run's log file and say where it is.
-    pub fn open_log(&mut self, name: &str, command: &str) {
-        match RunLog::create(&crate::runlog::log_dir(), name, command) {
+    /// Start this run's log file and say where it is. `source` records
+    /// where the run was started from (`terminal` or `web`).
+    pub fn open_log(&mut self, name: &str, command: &str, source: &str) {
+        match RunLog::create(&crate::runlog::log_dir(), name, command, source) {
             Ok(log) => {
                 self.push(format!(":: log: {}", log.path().display()));
+                self.log_path = Some(log.path().to_path_buf());
                 self.log = Some(log);
             }
             Err(e) => self.push(format!("[err] couldn't create a log file: {e}")),

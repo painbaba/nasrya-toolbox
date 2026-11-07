@@ -2,6 +2,7 @@
 //!
 //! Usage:
 //!   winsploit [--catalog <path>]         launch the interactive dashboard (TUI)
+//!       [--web | --no-web] [--port <n>]  open it in the browser too / skip the question
 //!   winsploit [--catalog <path>] list    print the tool catalog and exit
 //!   winsploit hashid <hash>...           identify hash types
 //!   winsploit --help                     show this help
@@ -22,6 +23,7 @@ mod scoop;
 mod session;
 mod theme;
 mod ui;
+mod web;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -34,11 +36,39 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 fn main() -> Result<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
 
-    // --catalog <path> / --catalog=<path> may appear anywhere.
+    // --catalog <path> / --catalog=<path>, --web, --no-web, --lan and
+    // --port <n> may appear anywhere.
     let mut catalog: Option<PathBuf> = None;
+    let mut web = WebOpts {
+        start: app::StartMode::Ask,
+        port: None,
+        lan: false,
+    };
     let mut i = 0;
     while i < args.len() {
-        if let Some(v) = args[i].strip_prefix("--catalog=") {
+        if args[i] == "--lan" {
+            args.remove(i);
+            web.lan = true;
+        } else if args[i] == "--web" || args[i] == "--no-web" {
+            web.start = if args.remove(i) == "--web" {
+                app::StartMode::Web
+            } else {
+                app::StartMode::Terminal
+            };
+        } else if args[i] == "--port" || args[i].starts_with("--port=") {
+            let v = match args.remove(i).strip_prefix("--port=") {
+                Some(v) => v.to_string(),
+                None if i < args.len() => args.remove(i),
+                None => String::new(),
+            };
+            match v.parse::<u16>() {
+                Ok(p) if p > 0 => web.port = Some(p),
+                _ => {
+                    eprintln!("winsploit: --port needs a port number (1-65535)");
+                    std::process::exit(2);
+                }
+            }
+        } else if let Some(v) = args[i].strip_prefix("--catalog=") {
             catalog = Some(PathBuf::from(v));
             args.remove(i);
         } else if args[i] == "--catalog" {
@@ -85,7 +115,7 @@ fn main() -> Result<()> {
             eprintln!("winsploit: unknown command '{other}'. Try `winsploit --help`.");
             std::process::exit(2);
         }
-        None => run_tui(catalog.as_deref()),
+        None => run_tui(catalog.as_deref(), web),
     }
 }
 
@@ -190,7 +220,14 @@ fn list(explicit: Option<&Path>) -> Result<()> {
     }
 }
 
-fn run_tui(explicit: Option<&Path>) -> Result<()> {
+/// How the web view starts (from --web, --no-web, --lan and --port).
+struct WebOpts {
+    start: app::StartMode,
+    port: Option<u16>,
+    lan: bool,
+}
+
+fn run_tui(explicit: Option<&Path>, web: WebOpts) -> Result<()> {
     let Loaded {
         path,
         catalog,
@@ -207,6 +244,9 @@ fn run_tui(explicit: Option<&Path>) -> Result<()> {
     let _ = execute!(std::io::stdout(), event::EnableBracketedPaste);
     let mut app = App::new(catalog, path, ignored);
     app.settings = theme::Settings::load();
+    app.set_start(web.start);
+    app.web_port = web.port;
+    app.web_lan = web.lan;
     let result = app.run(&mut terminal);
     let _ = execute!(std::io::stdout(), event::DisableBracketedPaste);
     ratatui::restore();
@@ -223,6 +263,12 @@ USAGE:\n\
     winsploit hashid <hash>...           identify hash types (+ hashcat / john modes)\n\
     winsploit --help                     show this help\n\
     winsploit --version                  show version\n\n\
+WEB VIEW (the same live session in your browser; the terminal stays in charge):\n\
+    winsploit --web                      start it and open it in the browser\n\
+    winsploit --no-web                   terminal only (skips the start-up question)\n\
+    winsploit --port <n>                 serve on port <n> (default 7878, else a free port)\n\
+    winsploit --lan                      serve your local network too (plain HTTP: trusted LANs only)\n\
+    In the dashboard: w starts / stops it, W serves your LAN, o opens it in the browser.\n\n\
 CATALOG (tools.yaml) is looked up in this order:\n\
     --catalog <path>, then %WINSPLOIT_CATALOG%, then next to winsploit.exe,\n\
     then the source checkout (dev builds), then %APPDATA%\\winsploit\\tools.yaml.\n\

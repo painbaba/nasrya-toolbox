@@ -26,6 +26,100 @@ use crate::scoop;
 use crate::session::{RunState, Session, CONSOLE, SLOTS};
 use crate::theme::{Field, Settings};
 use crate::ui;
+use crate::web::{self, WebAction};
+
+/// Something the user asked the session to do. Terminal keys and the web
+/// view both end up here (`App::apply`), so a feature is written once.
+/// Terminals are positions: 0 = console, 1..=SLOTS = tool terminals.
+///
+/// Adding a variant? Give it a `kind`, a terminal key in `BINDINGS` (and the
+/// `?` overlay), and a `data-action="<kind>"` control in src/web/index.html.
+/// The `every_action_has_a_key_and_a_web_control` test checks all three.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    /// Run tool `tool` (an index into `tools`). `slot` (1..=SLOTS) is the
+    /// terminal to replace when all are busy; None takes a free one.
+    Run {
+        tool: usize,
+        args: String,
+        slot: Option<usize>,
+    },
+    Install(usize),
+    /// Stop the tool in this terminal.
+    Cancel(usize),
+    /// Send a line to the tool in this terminal.
+    Stdin(usize, String),
+    /// Close that tool's input.
+    Eof(usize),
+    /// Close a tool terminal (stopping its tool).
+    Close(usize),
+    Redetect,
+    HashId(String),
+}
+
+// kind() and BINDINGS exist for the parity test (and as the checklist above)
+#[cfg_attr(not(test), allow(dead_code))]
+impl Action {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Action::Run { .. } => "run",
+            Action::Install(_) => "install",
+            Action::Cancel(_) => "cancel",
+            Action::Stdin(..) => "stdin",
+            Action::Eof(_) => "eof",
+            Action::Close(_) => "close",
+            Action::Redetect => "redetect",
+            Action::HashId(_) => "hashid",
+        }
+    }
+
+    /// Each action kind and the terminal key that triggers it (as written
+    /// in the `?` overlay).
+    pub const BINDINGS: &'static [(&'static str, &'static str)] = &[
+        ("run", "Enter"),
+        ("install", "i"),
+        ("cancel", "c"),
+        ("stdin", "s"),
+        ("eof", "Ctrl+D"),
+        ("close", "x"),
+        ("redetect", "r"),
+        ("hashid", "h"),
+    ];
+}
+
+/// Where an action came from (shown in the output and the run log).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    Terminal,
+    Web,
+}
+
+impl Source {
+    fn label(self) -> &'static str {
+        match self {
+            Source::Terminal => "terminal",
+            Source::Web => "web",
+        }
+    }
+}
+
+/// How the session starts: ask on the splash screen, or skip the question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartMode {
+    Ask,
+    Terminal,
+    /// start the web view and open it in the browser
+    Web,
+}
+
+/// The two choices of the start-up menu.
+pub const START_CHOICES: [(&str, &str); 2] = [
+    ("Continue in terminal", "the keyboard dashboard, right here"),
+    (
+        "Open in browser",
+        "the same live session in your browser; this terminal stays in charge",
+    ),
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ToolStatus {
@@ -151,6 +245,27 @@ pub struct App {
     pub confirm: Option<Confirm>,
     /// Run waiting for the user to pick a slot: (tool index, args).
     pending: Option<(usize, Vec<String>)>,
+    /// Re-detect was asked for during a pass: run another one after it.
+    redetect_queued: bool,
+    /// Start-up menu cursor (an index into START_CHOICES) while the splash
+    /// asks how to continue; None when the splash is just "press any key".
+    pub start_menu: Option<usize>,
+    start_mode: StartMode,
+    /// The web view, while it's on.
+    pub web: Option<web::Server>,
+    /// `--port`: serve on exactly this port.
+    pub web_port: Option<u16>,
+    /// `--lan`: serve the local network too, not only this machine.
+    pub web_lan: bool,
+    /// Per terminal (session id): output lines already sent to the web view.
+    web_sent: BTreeMap<u64, u64>,
+    /// Run logs already offered to the web view, by session id.
+    web_logs: BTreeMap<u64, PathBuf>,
+    /// Toasts not yet sent to the web view.
+    web_toasts: Vec<(ToastKind, String)>,
+    /// The last state sent to the web view (only changes are sent).
+    web_state: String,
+    catalog_path: PathBuf,
     next_id: u64,
     /// Counts finished processes, to find the oldest finished terminal.
     ended_seq: u64,
@@ -216,6 +331,17 @@ impl App {
             history: History::default(),
             confirm: None,
             pending: None,
+            redetect_queued: false,
+            start_menu: Some(0),
+            start_mode: StartMode::Ask,
+            web: None,
+            web_port: None,
+            web_lan: false,
+            web_sent: BTreeMap::new(),
+            web_logs: BTreeMap::new(),
+            web_toasts: Vec::new(),
+            web_state: String::new(),
+            catalog_path,
             next_id: CONSOLE,
             ended_seq: 0,
             status_line: "detecting tools…".into(),
@@ -264,15 +390,26 @@ impl App {
         tabs
     }
 
+    /// Skip the start-up question (`--web` / `--no-web`).
+    pub fn set_start(&mut self, mode: StartMode) {
+        self.start_mode = mode;
+        self.start_menu = (mode == StartMode::Ask).then_some(0);
+    }
+
     pub fn run(mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         self.detect_all(false);
+        if self.start_mode == StartMode::Web {
+            self.start_web(true);
+        }
         while !self.quit {
             terminal.draw(|f| match self.screen {
-                Screen::Splash => banner::render_splash(f, self.tick, &self.settings.theme()),
+                Screen::Splash => {
+                    banner::render_splash(f, self.tick, &self.settings.theme(), self.start_menu)
+                }
                 Screen::Main => ui::render(f, &self),
             })?;
 
-            // drain runner events
+            // drain runner (and web view) events
             while let Ok(ev) = self.rx.try_recv() {
                 self.on_runner_event(ev);
             }
@@ -280,12 +417,7 @@ impl App {
             if event::poll(Duration::from_millis(80))? {
                 match event::read()? {
                     Event::Key(key) if key.kind == KeyEventKind::Press => match self.screen {
-                        Screen::Splash => {
-                            self.screen = Screen::Main;
-                            if !self.settings.tour_done {
-                                self.tour = Some(0);
-                            }
-                        }
+                        Screen::Splash => self.on_key_splash(key.code),
                         Screen::Main => self.on_key(key),
                     },
                     // bracketed paste: the whole pasted text arrives at once
@@ -294,17 +426,61 @@ impl App {
                 }
             }
             self.expire_toasts(Instant::now());
+            self.sync_web();
             self.tick = self.tick.wrapping_add(1);
         }
         self.kill_all();
+        // ends the session for every browser ("session ended")
+        self.web = None;
         Ok(())
+    }
+
+    /// Splash keys. With the start-up menu: up/down (or 1/2) choose, Enter
+    /// confirms; without it any key enters. The first-run tour follows.
+    fn on_key_splash(&mut self, code: KeyCode) {
+        let pick = match self.start_menu {
+            None => Some(0),
+            Some(cur) => {
+                let n = START_CHOICES.len();
+                match code {
+                    KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => {
+                        self.start_menu = Some((cur + n - 1) % n);
+                        None
+                    }
+                    KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+                        self.start_menu = Some((cur + 1) % n);
+                        None
+                    }
+                    KeyCode::Char(c @ '1'..='2') => Some(c as usize - '1' as usize),
+                    KeyCode::Enter => Some(cur),
+                    KeyCode::Char('q') => {
+                        self.quit = true;
+                        None
+                    }
+                    _ => None,
+                }
+            }
+        };
+        let Some(choice) = pick else { return };
+        self.start_menu = None;
+        self.screen = Screen::Main;
+        if !self.settings.tour_done {
+            self.tour = Some(0);
+        }
+        if choice == 1 {
+            self.start_web(true);
+        }
     }
 
     // --------------------------------------------------------------- toasts
 
     pub fn toast(&mut self, kind: ToastKind, text: impl Into<String>) {
+        let text = text.into();
+        if self.web.is_some() {
+            self.web_toasts.push((kind, text.clone()));
+        }
         self.toasts.push(Toast {
-            text: text.into(),
+            text,
             kind,
             born: Instant::now(),
         });
@@ -446,7 +622,7 @@ impl App {
 
     /// Start `tool` with `args` in slot `slot` (0-based), replacing (and
     /// killing) whatever is there, and bring it to the front.
-    fn start_tool(&mut self, slot: usize, tool: usize, args: Vec<String>) {
+    fn start_tool(&mut self, slot: usize, tool: usize, args: Vec<String>, src: Source) {
         if let Some(mut old) = self.slots[slot].take() {
             if old.running() {
                 old.kill();
@@ -456,6 +632,9 @@ impl App {
         let t = self.tools[tool].clone();
         self.next_id += 1;
         let mut s = Session::new(self.next_id, &t.name, &t.description);
+        if src == Source::Web {
+            s.push(":: started from the browser");
+        }
         if let Some(note) = &t.note {
             s.push(format!(":: note: {note}"));
         }
@@ -464,7 +643,7 @@ impl App {
         let cmd = runner::tool_command(&t.run_cmd, &args);
         match runner::spawn_streaming(cmd, self.tx.clone(), true, s.id) {
             Ok(sp) => {
-                s.open_log(&t.name, &shown);
+                s.open_log(&t.name, &shown, src.label());
                 self.status_line = format!(
                     "running {} in terminal {} (pid {})",
                     t.name,
@@ -485,10 +664,22 @@ impl App {
         self.set_focus(slot + 1);
     }
 
-    /// Run in a free slot, or ask which busy one to replace.
-    fn run_in_slot(&mut self, tool: usize, args: Vec<String>) {
+    /// Run in `slot` (1..=SLOTS) if given, else a free slot; when every
+    /// slot is busy the terminal asks which to replace, and the web view
+    /// (which asks before sending) gets an error.
+    fn run_in_slot(&mut self, tool: usize, args: Vec<String>, src: Source, slot: Option<usize>) {
+        if let Some(n) = slot.filter(|n| (1..=SLOTS).contains(n)) {
+            self.start_tool(n - 1, tool, args, src);
+            return;
+        }
         match self.free_slot() {
-            Some(slot) => self.start_tool(slot, tool, args),
+            Some(slot) => self.start_tool(slot, tool, args, src),
+            None if src == Source::Web => {
+                self.toast(
+                    ToastKind::Err,
+                    format!("all {SLOTS} terminals are busy: pick one to replace"),
+                );
+            }
             None => {
                 self.pending = Some((tool, args));
                 self.mode = Mode::SlotPick;
@@ -515,7 +706,18 @@ impl App {
             self.confirm = Some(Confirm::Close(pos));
             return;
         }
-        let mut s = self.slots[pos - 1].take().expect("checked above");
+        self.close_terminal(pos);
+    }
+
+    /// Close tool terminal `pos` (1..=SLOTS), stopping its tool.
+    fn close_terminal(&mut self, pos: usize) {
+        let Some(mut s) = self
+            .slots
+            .get_mut(pos.wrapping_sub(1))
+            .and_then(Option::take)
+        else {
+            return;
+        };
         if s.running() {
             s.kill();
             s.exited(None, 0);
@@ -547,6 +749,9 @@ impl App {
     /// started (installs that add a PATH entry, a freshly installed Scoop).
     fn detect_all(&mut self, refresh_path: bool) {
         if self.detecting {
+            // run again when this pass is done: it may predate an install
+            // or a PATH change the user is asking about
+            self.redetect_queued = true;
             return;
         }
         self.detecting = true;
@@ -571,6 +776,10 @@ impl App {
 
     fn on_detected(&mut self, found: Vec<detect::Found>) {
         self.detecting = false;
+        if std::mem::take(&mut self.redetect_queued) {
+            self.detect_all(true);
+            return;
+        }
         self.conflicts = vec![None; found.len()];
         self.status = found
             .into_iter()
@@ -631,7 +840,8 @@ impl App {
                                 (ToastKind::Err, format!("✗ {title} stopped"))
                             });
                         }
-                        if pos > 0 && !focused {
+                        // also when focused: don't leave "running X" behind
+                        if pos > 0 {
                             let how = match code {
                                 Some(c) => format!("exit {c}"),
                                 None => "ended".into(),
@@ -660,6 +870,82 @@ impl App {
                 }
             }
             AppEvent::Detected(found) => self.on_detected(found),
+            AppEvent::Web(action) => self.on_web_action(action),
+        }
+    }
+
+    /// Resolve a web request (tools are named, not indexed) and apply it.
+    fn on_web_action(&mut self, action: WebAction) {
+        let tool = |app: &mut App, name: &str| {
+            let i = app.tools.iter().position(|t| t.name == name);
+            if i.is_none() {
+                app.console.push(format!(
+                    "[err] the browser asked for an unknown tool '{name}'"
+                ));
+            }
+            i
+        };
+        let action = match action {
+            WebAction::Run {
+                tool: name,
+                args,
+                slot,
+            } => match tool(self, &name) {
+                Some(i) => Action::Run {
+                    tool: i,
+                    args,
+                    slot,
+                },
+                None => return,
+            },
+            WebAction::Install { tool: name } => match tool(self, &name) {
+                Some(i) => Action::Install(i),
+                None => return,
+            },
+            WebAction::Cancel { term } => Action::Cancel(term),
+            WebAction::Stdin { term, line } => Action::Stdin(term, line),
+            WebAction::Eof { term } => Action::Eof(term),
+            WebAction::Close { term } => Action::Close(term),
+            WebAction::Redetect => Action::Redetect,
+            WebAction::Hashid { hash } => Action::HashId(hash),
+        };
+        self.apply(action, Source::Web);
+    }
+
+    /// Do `action`. The one place where terminal keys and web requests
+    /// change the session.
+    pub fn apply(&mut self, action: Action, src: Source) {
+        match action {
+            Action::Run { tool, args, slot } => {
+                if tool >= self.tools.len() {
+                    return;
+                }
+                let name = self.tools[tool].name.clone();
+                self.history.push(&name, &args);
+                self.launch(tool, &args, src, slot);
+            }
+            Action::Install(tool) if tool < self.tools.len() => self.install(tool, src),
+            Action::Install(_) => {}
+            Action::Cancel(pos) => self.cancel(pos),
+            Action::Stdin(pos, line) => match self.session_mut(pos) {
+                Some(s) if s.running() => s.send(&line),
+                _ => self.status_line = "nothing is running in that terminal".into(),
+            },
+            Action::Eof(pos) => {
+                if let Some(s) = self.session_mut(pos).filter(|s| s.has_stdin()) {
+                    s.close_stdin();
+                }
+                if self.mode == Mode::StdinInput && pos == self.focus {
+                    self.mode = Mode::Browsing;
+                    self.editor.set("");
+                }
+            }
+            Action::Close(pos) => self.close_terminal(pos),
+            Action::Redetect => self.detect_all(true),
+            Action::HashId(hash) => {
+                self.history.push("\u{0}hashid", &hash);
+                self.identify_hash(&hash);
+            }
         }
     }
 
@@ -737,7 +1023,7 @@ impl App {
             KeyCode::Char(c @ '1'..='9') if (c as usize - '0' as usize) <= SLOTS => {
                 self.mode = Mode::Browsing;
                 if let Some((tool, args)) = self.pending.take() {
-                    self.start_tool(c as usize - '1' as usize, tool, args);
+                    self.start_tool(c as usize - '1' as usize, tool, args, Source::Terminal);
                 }
             }
             KeyCode::Esc | KeyCode::Char('q') => {
@@ -795,7 +1081,7 @@ impl App {
                 }
             }
             KeyCode::Char('x') => self.close_focused(confirm == Some(Confirm::Close(self.focus))),
-            KeyCode::Char('c') => self.cancel(),
+            KeyCode::Char('c') => self.apply(Action::Cancel(self.focus), Source::Terminal),
             KeyCode::Char('s') => self.open_stdin(),
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char('t') => {
@@ -814,7 +1100,10 @@ impl App {
                 self.editor.set(&self.filter.clone());
                 self.mode = Mode::Filter;
             }
-            KeyCode::Char('r') => self.detect_all(true),
+            KeyCode::Char('r') => self.apply(Action::Redetect, Source::Terminal),
+            KeyCode::Char('w') => self.toggle_web(self.web_lan),
+            KeyCode::Char('W') => self.toggle_web(true),
+            KeyCode::Char('o') => self.start_web(true),
             KeyCode::PageUp => self.focused_mut().map_or((), Session::page_up),
             KeyCode::PageDown => self.focused_mut().map_or((), Session::page_down),
             KeyCode::End => self.focused_mut().map_or((), Session::follow),
@@ -827,11 +1116,16 @@ impl App {
             KeyCode::Enter | KeyCode::Char('i') if !self.visible().contains(&self.selected) => {
                 self.status_line = "no tool selected here (← → category, / filter)".into();
             }
-            KeyCode::Char('i') => self.install_selected(),
+            KeyCode::Char('i') => self.apply(Action::Install(self.selected), Source::Terminal),
             KeyCode::Enter => {
                 if self.tools[self.selected].launch == Launch::Dataset {
                     // nothing to run, so no args prompt
-                    self.show_dataset();
+                    let run = Action::Run {
+                        tool: self.selected,
+                        args: String::new(),
+                        slot: None,
+                    };
+                    self.apply(run, Source::Terminal);
                 } else {
                     let hint = self.tools[self.selected].args_hint.clone();
                     self.editor.set(&hint.unwrap_or_default());
@@ -897,13 +1191,18 @@ impl App {
                         }
                         self.find_next(true);
                     }
-                    Mode::HashInput => self.identify_hash(&text),
+                    Mode::HashInput => self.apply(Action::HashId(text), Source::Terminal),
                     Mode::StdinInput => {
-                        if let Some(s) = self.focused_mut() {
-                            s.send(&text)
-                        }
+                        self.apply(Action::Stdin(self.focus, text), Source::Terminal)
                     }
-                    _ => self.launch(&text),
+                    _ => {
+                        let run = Action::Run {
+                            tool: self.selected,
+                            args: text,
+                            slot: None,
+                        };
+                        self.apply(run, Source::Terminal)
+                    }
                 }
             }
             KeyCode::Up => {
@@ -932,9 +1231,7 @@ impl App {
                 // end-of-input: close the pipe so the tool sees EOF
                 self.mode = Mode::Browsing;
                 self.editor.set("");
-                if let Some(s) = self.focused_mut() {
-                    s.close_stdin();
-                }
+                self.apply(Action::Eof(self.focus), Source::Terminal);
             }
             KeyCode::Char('u') if ctrl => e.clear_to_start(),
             KeyCode::Char('w') if ctrl => e.delete_word_left(),
@@ -1078,9 +1375,9 @@ impl App {
         self.set_focus(0);
     }
 
-    fn launch(&mut self, args_str: &str) {
-        let status = self.status[self.selected];
-        let tool = self.tools[self.selected].clone();
+    fn launch(&mut self, idx: usize, args_str: &str, src: Source, slot: Option<usize>) {
+        let status = self.status[idx];
+        let tool = self.tools[idx].clone();
         let name = tool.name.clone();
 
         match status {
@@ -1094,7 +1391,7 @@ impl App {
                 return;
             }
             ToolStatus::Conflict => {
-                let path = self.conflicts[self.selected]
+                let path = self.conflicts[idx]
                     .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
@@ -1122,10 +1419,10 @@ impl App {
         };
 
         match tool.launch {
-            Launch::Stream => self.run_in_slot(self.selected, args),
+            Launch::Stream => self.run_in_slot(idx, args, src, slot),
             Launch::Web if !tool.run_cmd.trim().is_empty() => {
                 // the server streams in a terminal; the browser opens after
-                self.run_in_slot(self.selected, args)
+                self.run_in_slot(idx, args, src, slot)
             }
             Launch::Web => {
                 let url = tool.url.clone().unwrap_or_default();
@@ -1151,15 +1448,15 @@ impl App {
                     }
                 }
             }
-            Launch::Dataset => self.show_dataset(),
+            Launch::Dataset => self.show_dataset(idx),
         }
     }
 
     /// Enter on a dataset: list its files and copy the folder path, so it can
     /// be pasted into another tool's arguments.
-    fn show_dataset(&mut self) {
-        let tool = self.tools[self.selected].clone();
-        match self.status[self.selected] {
+    fn show_dataset(&mut self, idx: usize) {
+        let tool = self.tools[idx].clone();
+        match self.status[idx] {
             ToolStatus::Installed => {}
             ToolStatus::Unknown => {
                 self.status_line = "still detecting tools — try again in a moment".into();
@@ -1223,6 +1520,266 @@ impl App {
         });
     }
 
+    // ------------------------------------------------------------ web view
+
+    /// Start the web view (no-op if it's on). With `open`, also open it in
+    /// the default browser.
+    fn start_web(&mut self, open: bool) {
+        if self.web.is_none() {
+            match web::Server::start(
+                self.web_port,
+                self.web_lan,
+                self.web_hello(),
+                self.tx.clone(),
+            ) {
+                Ok(srv) => {
+                    let c = &mut self.console;
+                    c.push(format!(":: web view on {}", srv.login_url()));
+                    if srv.lan() {
+                        match srv.lan_url() {
+                            Some(u) => c.push(format!(":: on your network: {u}")),
+                            None => c.push(":: on your network: no LAN address found"),
+                        }
+                        c.push(
+                            "[err] LAN mode: anyone with that link can run tools as you. \
+                             It's plain HTTP, so share it only on networks you trust.",
+                        );
+                    }
+                    c.push(":: same session as this terminal · o opens it · w stops it");
+                    self.status_line = format!(
+                        "web view on {}:{}",
+                        if srv.lan() {
+                            "your network"
+                        } else {
+                            "127.0.0.1"
+                        },
+                        srv.port()
+                    );
+                    self.web = Some(srv);
+                    self.web_sent.clear();
+                    self.web_logs.clear();
+                    self.web_state.clear();
+                    self.set_focus(0);
+                }
+                Err(e) => {
+                    let port = self.web_port.unwrap_or(web::DEFAULT_PORT);
+                    self.console.push(format!(
+                        "[err] couldn't start the web view on port {port}: {e}"
+                    ));
+                    self.set_focus(0);
+                    return;
+                }
+            }
+        }
+        if open {
+            if let Some(url) = self.web.as_ref().map(|w| w.login_url()) {
+                if let Err(e) = runner::open_url(&url) {
+                    self.console
+                        .push(format!("[err] couldn't open the browser: {e}"));
+                }
+            }
+        }
+    }
+
+    /// `w`: start the web view on this machine, or stop it. `W`: the same
+    /// on your network (LAN), or switch a running one between the two.
+    fn toggle_web(&mut self, lan: bool) {
+        if let Some(was_lan) = self.web.as_ref().map(web::Server::lan) {
+            self.web = None; // every open tab shows "session ended"
+            self.web_toasts.clear();
+            // W on a local web view switches it to the LAN; anything else stops
+            if !lan || was_lan {
+                self.console.push(":: web view stopped");
+                self.status_line = "web view stopped".into();
+                return;
+            }
+        }
+        self.web_lan = lan;
+        self.start_web(false);
+    }
+
+    /// Catalog data the page needs once: sent when a browser connects.
+    fn web_hello(&self) -> String {
+        let tools: Vec<serde_json::Value> = self
+            .tools
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "name": t.name,
+                    "categories": t.categories,
+                    "primary": t.primary(),
+                    "description": t.description,
+                    "run_cmd": t.run_cmd,
+                    "args_hint": t.args_hint,
+                    "launch": match t.launch {
+                        Launch::Stream => "stream",
+                        Launch::Gui => "gui",
+                        Launch::Web => "web",
+                        Launch::Dataset => "dataset",
+                    },
+                    "install": match t.install {
+                        Install::Scoop => "scoop",
+                        Install::Pipx => "pipx",
+                    },
+                    "note": t.note,
+                })
+            })
+            .collect();
+        let tabs: Vec<serde_json::Value> = self
+            .cat_tabs
+            .iter()
+            .map(|tab| {
+                let (key, blurb) = match tab {
+                    CatTab::All => ("all".to_string(), "all tools, grouped by main category"),
+                    CatTab::Installed => ("installed".into(), "tools installed on this machine"),
+                    CatTab::Cat(id) => (
+                        format!("cat:{id}"),
+                        registry::CATEGORIES
+                            .iter()
+                            .find(|c| c.id == id)
+                            .map_or("", |c| c.blurb),
+                    ),
+                };
+                serde_json::json!({ "key": key, "label": tab.label(), "blurb": blurb })
+            })
+            .collect();
+        let rank: Vec<usize> = self
+            .tools
+            .iter()
+            .map(|t| registry::category_rank(t.primary()))
+            .collect();
+        serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "catalog": self.catalog_path.display().to_string(),
+            "slots": SLOTS,
+            "tools": tools,
+            "tabs": tabs,
+            "rank": rank,
+        })
+        .to_string()
+    }
+
+    /// Everything that changes, as the page sees it.
+    fn web_state_json(&self) -> String {
+        let status: Vec<&str> = self
+            .status
+            .iter()
+            .map(|s| match s {
+                ToolStatus::Unknown => "unknown",
+                ToolStatus::Installed => "installed",
+                ToolStatus::Missing => "missing",
+                ToolStatus::Conflict => "conflict",
+            })
+            .collect();
+        let conflicts: Vec<Option<String>> = self
+            .conflicts
+            .iter()
+            .map(|c| c.as_ref().map(|p| p.display().to_string()))
+            .collect();
+        let terminals: Vec<serde_json::Value> = (0..=SLOTS)
+            .map(|pos| match self.session(pos) {
+                None => serde_json::Value::Null,
+                Some(s) => {
+                    let (state, code) = match s.state {
+                        RunState::Idle => ("idle", None),
+                        RunState::Running => ("running", None),
+                        RunState::Exited(c) => ("exited", c),
+                        RunState::Killed => ("killed", None),
+                    };
+                    serde_json::json!({
+                        "pos": pos,
+                        "sid": s.id,
+                        "title": s.title,
+                        "subtitle": s.subtitle,
+                        "state": state,
+                        "code": code,
+                        "failed": s.failed(),
+                        "pid": s.pid,
+                        "stdin": s.has_stdin(),
+                        "log": s.log_path.is_some(),
+                    })
+                }
+            })
+            .collect();
+        let history: BTreeMap<&str, &[String]> = self
+            .tools
+            .iter()
+            .filter_map(|t| {
+                let h = self.history.list(&t.name);
+                (!h.is_empty()).then_some((t.name.as_str(), h))
+            })
+            .collect();
+        serde_json::json!({
+            "status": status,
+            "conflicts": conflicts,
+            "terminals": terminals,
+            "installing": self.installing,
+            "detecting": self.detecting,
+            "status_line": self.status_line,
+            "history": history,
+            "viewers": self.web.as_ref().map_or(0, |w| w.viewers()),
+            "lan": self.web.as_ref().is_some_and(|w| w.lan()),
+        })
+        .to_string()
+    }
+
+    /// Once per frame: send each terminal's new output, new run logs,
+    /// toasts and (if it changed) the state.
+    fn sync_web(&mut self) {
+        if self.web.is_none() {
+            return;
+        }
+        // what each open terminal still owes the browser:
+        // (sid, reset, new lines, seq now, a log to offer)
+        let mut owed = Vec::new();
+        for pos in 0..=SLOTS {
+            let Some(s) = self.session(pos) else { continue };
+            let (reset, lines) = match self.web_sent.get(&s.id) {
+                None => (true, s.output.clone()),
+                Some(&sent) if s.seq > sent => {
+                    let k = ((s.seq - sent) as usize).min(s.output.len());
+                    (false, s.output[s.output.len() - k..].to_vec())
+                }
+                _ => (false, Vec::new()),
+            };
+            let log = s
+                .log_path
+                .clone()
+                .filter(|p| self.web_logs.get(&s.id) != Some(p));
+            owed.push((s.id, reset, lines, s.seq, log));
+        }
+        let open: Vec<u64> = owed.iter().map(|o| o.0).collect();
+        let toasts = std::mem::take(&mut self.web_toasts);
+        let state = self.web_state_json();
+
+        let Some(w) = self.web.as_ref() else { return };
+        for (sid, reset, lines, seq, log) in owed {
+            w.push_lines(sid, reset, lines);
+            self.web_sent.insert(sid, seq);
+            if let Some(p) = log {
+                w.set_log(sid, p.clone());
+                self.web_logs.insert(sid, p);
+            }
+        }
+        if self.web_sent.len() != open.len() {
+            self.web_sent.retain(|sid, _| open.contains(sid));
+            self.web_logs.retain(|sid, _| open.contains(sid));
+            w.retain_terms(&open);
+        }
+        for (kind, text) in toasts {
+            let k = match kind {
+                ToastKind::Ok => "ok",
+                ToastKind::Err => "err",
+                ToastKind::Info => "info",
+            };
+            w.toast(k, &text);
+        }
+        if state != self.web_state {
+            w.set_state(state.clone());
+            self.web_state = state;
+        }
+    }
+
     /// Is there a real `python`? The Microsoft Store puts a stub
     /// `python.exe` on PATH that only prints "Python was not found" (exit
     /// 9009), so resolving the name isn't enough; ask it for its version.
@@ -1240,12 +1797,15 @@ impl App {
 
     /// Installs run in the console, one at a time, so they never take a
     /// tool terminal.
-    fn install_selected(&mut self) {
+    fn install(&mut self, idx: usize, src: Source) {
         if self.console.running() {
             self.status_line = "an install is already running (see console, 0)".into();
+            if src == Source::Web {
+                self.toast(ToastKind::Err, "an install is already running");
+            }
             return;
         }
-        let tool = self.tools[self.selected].clone();
+        let tool = self.tools[idx].clone();
         let name = tool.name.clone();
 
         let pipx = detect::resolve("pipx").is_some();
@@ -1266,6 +1826,10 @@ impl App {
             }
         };
         let line = steps.join(" && ");
+        if src == Source::Web {
+            self.console
+                .push(format!(":: install of {name} started from the browser"));
+        }
         self.console.push(format!("$ {line}"));
 
         // scoop and pipx are .cmd/.bat shims, so go through cmd. Every token
@@ -1279,7 +1843,8 @@ impl App {
         }
         match runner::spawn_streaming(cmd, self.tx.clone(), false, CONSOLE) {
             Ok(sp) => {
-                self.console.open_log(&format!("install-{name}"), &line);
+                self.console
+                    .open_log(&format!("install-{name}"), &line, src.label());
                 self.console.started(sp.pid, None);
                 self.installing = true;
                 self.status_line = format!("installing {name}…");
@@ -1290,10 +1855,9 @@ impl App {
         }
     }
 
-    /// `c`: stop the focused terminal's tool; its output stays.
-    fn cancel(&mut self) {
-        let pos = self.focus;
-        match self.focused_mut().and_then(Session::kill) {
+    /// `c`: stop the tool in terminal `pos`; its output stays.
+    fn cancel(&mut self, pos: usize) {
+        match self.session_mut(pos).and_then(Session::kill) {
             Some(pid) => {
                 self.status_line = format!("stopping pid {pid} · x closes the terminal");
             }
@@ -1458,7 +2022,7 @@ mod tests {
             fake(&mut a, i, "busy", true, 0);
         }
         let nmap = a.tools.iter().position(|t| t.name == "nmap").unwrap();
-        a.run_in_slot(nmap, vec![]);
+        a.run_in_slot(nmap, vec![], Source::Terminal, None);
         assert_eq!(a.mode, Mode::SlotPick);
         a.on_key(key(KeyCode::Esc));
         assert_eq!(a.mode, Mode::Browsing);
@@ -1561,5 +2125,153 @@ mod tests {
         assert_eq!(a.focus, 4, "grid never focuses the console");
         a.on_key(key(KeyCode::Char('0')));
         assert!(!a.grid);
+    }
+
+    // ------------------------------------------------------------ web view
+
+    /// Parity: every action can be done from the terminal (a key in the `?`
+    /// overlay) and from the web view (a data-action control).
+    #[test]
+    fn every_action_has_a_key_and_a_web_control() {
+        let every = [
+            Action::Run {
+                tool: 0,
+                args: String::new(),
+                slot: None,
+            },
+            Action::Install(0),
+            Action::Cancel(1),
+            Action::Stdin(1, String::new()),
+            Action::Eof(1),
+            Action::Close(1),
+            Action::Redetect,
+            Action::HashId(String::new()),
+        ];
+        assert_eq!(every.len(), Action::BINDINGS.len());
+        for a in &every {
+            let kind = a.kind();
+            let (_, key) = Action::BINDINGS
+                .iter()
+                .find(|(k, _)| *k == kind)
+                .unwrap_or_else(|| panic!("{kind}: no terminal key in Action::BINDINGS"));
+            assert!(
+                ui::HELP
+                    .iter()
+                    .any(|(k, d)| k.split_whitespace().any(|w| w == *key) || d.contains(key)),
+                "{kind}: key {key:?} isn't listed in the ? overlay"
+            );
+            assert!(
+                web::INDEX_HTML.contains(&format!("data-action=\"{kind}\""))
+                    || web::APP_JS.contains(&format!("data-action=\"{kind}\"")),
+                "{kind}: no data-action control in the web page"
+            );
+        }
+    }
+
+    #[test]
+    fn web_actions_go_through_the_same_path() {
+        let mut a = app();
+        a.on_web_action(WebAction::Hashid {
+            hash: "5f4dcc3b5aa765d61d8327deb882cf99".into(),
+        });
+        assert!(a.console.output.iter().any(|l| l.contains("MD5")));
+        // unknown tools are reported, nothing runs
+        a.on_web_action(WebAction::Run {
+            tool: "no-such-tool".into(),
+            args: String::new(),
+            slot: None,
+        });
+        assert!(a.console.output.last().unwrap().contains("unknown tool"));
+        // a tool that isn't detected yet isn't launched, but the args land
+        // in the shared history
+        let name = a.tools[0].name.clone();
+        a.on_web_action(WebAction::Run {
+            tool: name.clone(),
+            args: "-h".into(),
+            slot: None,
+        });
+        assert!(a.slots.iter().all(Option::is_none));
+        assert!(a.status_line.contains("still detecting"));
+        assert_eq!(a.history.list(&name), ["-h"]);
+        // closing from the web closes even a running terminal (the page
+        // asks first)
+        fake(&mut a, 1, "nmap", true, 0);
+        a.on_web_action(WebAction::Close { term: 2 });
+        assert!(a.slots[1].is_none());
+    }
+
+    #[test]
+    fn all_busy_from_the_web_asks_the_page_not_the_terminal() {
+        let mut a = app();
+        for i in 0..SLOTS {
+            fake(&mut a, i, "busy", true, 0);
+        }
+        let nmap = a.tools.iter().position(|t| t.name == "nmap").unwrap();
+        a.run_in_slot(nmap, vec![], Source::Web, None);
+        assert_eq!(a.mode, Mode::Browsing, "the terminal's picker stays closed");
+        assert!(a.toasts.last().unwrap().text.contains("busy"));
+    }
+
+    #[test]
+    fn start_menu_then_the_tour() {
+        let mut a = app();
+        assert_eq!(a.start_menu, Some(0));
+        a.on_key_splash(KeyCode::Down);
+        assert_eq!(a.start_menu, Some(1));
+        a.on_key_splash(KeyCode::Down);
+        assert_eq!(a.start_menu, Some(0)); // wraps
+        a.on_key_splash(KeyCode::Char('x')); // other keys do nothing
+        assert!(a.screen == Screen::Splash);
+        a.on_key_splash(KeyCode::Enter);
+        assert!(a.screen == Screen::Main && a.web.is_none());
+        assert_eq!(a.tour, Some(0), "first launch: the tour follows");
+
+        let mut b = app();
+        b.set_start(StartMode::Terminal);
+        b.settings.tour_done = true;
+        assert_eq!(b.start_menu, None);
+        b.on_key_splash(KeyCode::Char('x')); // any key enters
+        assert!(b.screen == Screen::Main && b.tour.is_none());
+    }
+
+    #[test]
+    fn exit_in_the_shown_terminal_replaces_the_running_status() {
+        let mut a = app();
+        fake(&mut a, 0, "nmap", true, 0);
+        a.set_focus(1);
+        a.status_line = "running nmap in terminal 1 (pid 1)".into();
+        let sid = a.slots[0].as_ref().unwrap().id;
+        a.on_runner_event(AppEvent::Exited { sid, code: Some(0) });
+        assert!(a.status_line.contains("nmap finished in terminal 1"));
+    }
+
+    #[test]
+    fn redetect_during_a_pass_runs_again_after_it() {
+        let mut a = app();
+        a.detecting = true;
+        a.apply(Action::Redetect, Source::Web);
+        assert!(a.redetect_queued);
+        // the stale pass's result is dropped and a fresh pass starts
+        a.on_detected(vec![detect::Found::Missing; a.tools.len()]);
+        assert!(a.detecting && !a.redetect_queued);
+        assert!(a.status.iter().all(|s| *s == ToolStatus::Unknown));
+    }
+
+    #[test]
+    fn web_state_lists_terminals_and_hello_the_tabs() {
+        let mut a = app();
+        fake(&mut a, 2, "ffuf", true, 0);
+        let s: serde_json::Value = serde_json::from_str(&a.web_state_json()).unwrap();
+        assert_eq!(s["status"].as_array().unwrap().len(), a.tools.len());
+        let terms = s["terminals"].as_array().unwrap();
+        assert_eq!(terms.len(), SLOTS + 1);
+        assert_eq!(terms[0]["title"], "console");
+        assert!(terms[1].is_null());
+        assert_eq!(terms[3]["title"], "ffuf");
+        assert_eq!(terms[3]["state"], "running");
+        let h: serde_json::Value = serde_json::from_str(&a.web_hello()).unwrap();
+        assert_eq!(h["tabs"][0]["label"], "All");
+        assert_eq!(h["tabs"][1]["key"], "installed");
+        assert_eq!(h["tools"].as_array().unwrap().len(), a.tools.len());
     }
 }

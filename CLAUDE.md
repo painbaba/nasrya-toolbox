@@ -71,6 +71,16 @@ manifest in `bucket/`, and `bucket_tests.rs` validates those manifests against t
 - Executables resolve via PATH × PATHEXT, never the cwd. `.cmd`/`.bat` shims go through Rust's
   escaped cmd.exe path.
 - Each run and install writes a timestamped log (runlog.rs, under `%LOCALAPPDATA%\winsploit\logs`).
+- The web view (web.rs) is off by default, binds 127.0.0.1 unless `--lan`, needs the per-session
+  token/cookie, checks Host (IP literals only) and Origin + JSON on POSTs, and only accepts
+  `WebAction`s. Never add an endpoint that runs a command line or serves arbitrary files.
+
+**Terminal and web share one code path.** Keys and web requests both become an `app::Action`
+and go through `App::apply`; `sync_web` mirrors sessions, toasts and state to the browser once
+per frame. A new user-facing action needs a `kind`, a key in `Action::BINDINGS` (listed in the
+`?` overlay) and a `data-action="<kind>"` control in `src/web/index.html`; the
+`every_action_has_a_key_and_a_web_control` test enforces it. The page (index.html, app.css,
+app.js) is embedded with `include_str!`, so rebuild after editing it.
 
 ## Testing conventions
 

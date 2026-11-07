@@ -21,6 +21,8 @@ pub enum AppEvent {
     Exited { sid: u64, code: Option<i32> },
     /// Background detection finished: one result per tool.
     Detected(Vec<detect::Found>),
+    /// An action sent from the web view (see web.rs).
+    Web(crate::web::WebAction),
 }
 
 /// Build the command that runs a tool: `program` resolved the way Windows
@@ -284,7 +286,7 @@ mod tests {
                     assert_eq!(sid, 7);
                     break;
                 }
-                AppEvent::Detected(_) => {}
+                AppEvent::Detected(_) | AppEvent::Web(_) => {}
             }
         }
         assert_eq!(lines, ["apple", "pear"]);
@@ -318,7 +320,7 @@ mod tests {
                     assert_eq!(code, Some(0));
                     break;
                 }
-                AppEvent::Detected(_) => {}
+                AppEvent::Detected(_) | AppEvent::Web(_) => {}
             }
         }
         let _ = std::fs::remove_dir_all(&dir);

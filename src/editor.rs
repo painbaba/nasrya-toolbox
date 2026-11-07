@@ -154,6 +154,11 @@ impl History {
         }
     }
 
+    /// Everything remembered for `key`, oldest first.
+    pub fn list(&self, key: &str) -> &[String] {
+        self.entries.get(key).map_or(&[], Vec::as_slice)
+    }
+
     /// Stop browsing (call when a prompt opens or closes).
     pub fn reset(&mut self) {
         self.pos = None;

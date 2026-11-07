@@ -1,6 +1,6 @@
 //! ASCII-art banner and splash screen for winsploit.
 
-use ratatui::layout::{Alignment, Constraint, Direction, Layout};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -49,8 +49,9 @@ fn glow(c: (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
     )
 }
 
-/// Render the full-screen splash shown at startup.
-pub fn render_splash(f: &mut Frame, tick: u64, th: &Theme) {
+/// Render the full-screen splash shown at startup. With `menu` (the
+/// highlighted choice), it asks how to continue instead of "press any key".
+pub fn render_splash(f: &mut Frame, tick: u64, th: &Theme, menu: Option<usize>) {
     let area = f.area();
     let p = &th.pal;
 
@@ -76,8 +77,9 @@ pub fn render_splash(f: &mut Frame, tick: u64, th: &Theme) {
     let logo_lines: Vec<&str> = LOGO.lines().filter(|l| !l.is_empty()).collect();
     let logo_h = logo_lines.len() as u16;
 
-    // Block layout: pad / logo / gap / subtitle / gap / prompt / pad.
-    let total = logo_h + 1 + 1 + 1 + 1;
+    // Block layout: pad / logo / gap / subtitle / gap / prompt or menu / pad.
+    let prompt_h = if menu.is_some() { MENU_H } else { 1 };
+    let total = logo_h + 1 + 1 + 1 + prompt_h;
     let top_pad = inner.height.saturating_sub(total) / 2;
 
     let rows = Layout::default()
@@ -88,7 +90,7 @@ pub fn render_splash(f: &mut Frame, tick: u64, th: &Theme) {
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
-            Constraint::Length(1),
+            Constraint::Length(prompt_h),
             Constraint::Min(0),
         ])
         .split(inner);
@@ -129,6 +131,11 @@ pub fn render_splash(f: &mut Frame, tick: u64, th: &Theme) {
     .alignment(Alignment::Center);
     f.render_widget(Paragraph::new(subtitle), rows[3]);
 
+    if let Some(cur) = menu {
+        render_start_menu(f, th, cur, rows[5]);
+        return;
+    }
+
     // Blinking "press any key" prompt.
     let on = (tick / 5).is_multiple_of(2);
     let prompt = if on {
@@ -142,6 +149,63 @@ pub fn render_splash(f: &mut Frame, tick: u64, th: &Theme) {
     }
     .alignment(Alignment::Center);
     f.render_widget(Paragraph::new(prompt), rows[5]);
+}
+
+/// Height of the start-up menu: question, gap, two 2-line choices with a gap
+/// between them, gap, hint.
+const MENU_H: u16 = 9;
+
+/// "How do you want to use Winsploit?" with the two START_CHOICES, styled
+/// like Claude Code's numbered pickers.
+fn render_start_menu(f: &mut Frame, th: &Theme, cur: usize, area: Rect) {
+    let p = &th.pal;
+    let pointer = th.glyph.pointer.trim_end();
+    let pad = " ".repeat(pointer.chars().count());
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "How do you want to use winsploit?",
+            th.strong(p.fg),
+        )),
+        Line::raw(""),
+    ];
+    for (i, (label, desc)) in crate::app::START_CHOICES.iter().enumerate() {
+        if i > 0 {
+            lines.push(Line::raw(""));
+        }
+        let on = i == cur;
+        lines.push(Line::from(vec![
+            Span::styled(
+                if on { pointer.to_string() } else { pad.clone() },
+                th.strong(p.accent),
+            ),
+            Span::styled(
+                format!(" {}. {label}", i + 1),
+                if on { th.strong(p.accent) } else { th.fg(p.fg) },
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("{pad}    {desc}"),
+            th.fg(p.dim),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::styled("↑/↓", th.fg(p.accent)),
+        Span::styled(" choose · ", th.fg(p.dim)),
+        Span::styled("Enter", th.fg(p.accent)),
+        Span::styled(" confirm · ", th.fg(p.dim)),
+        Span::styled("q", th.fg(p.accent)),
+        Span::styled(" quit", th.fg(p.dim)),
+    ]));
+    // a left-aligned block, centered as a whole
+    let w = lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16;
+    let w = w.min(area.width);
+    let block = Rect {
+        x: area.x + area.width.saturating_sub(w) / 2,
+        width: w,
+        ..area
+    };
+    f.render_widget(Paragraph::new(lines), block);
 }
 
 /// A compact one-line wordmark for the main dashboard header.

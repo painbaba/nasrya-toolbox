@@ -99,6 +99,11 @@ pub const HELP: &[(&str, &str)] = &[
     ("f  n  N", "find in the output · older / newer match"),
     ("h", "identify a hash (built in)"),
     ("t", "appearance: theme, borders, glyphs, overlays"),
+    (
+        "w  W",
+        "web view: this session in a browser (W: on your LAN)",
+    ),
+    ("o", "open the web view in your browser"),
     ("?", "this help"),
     ("q  Esc", "quit (twice if tools are still running)"),
     ("", ""),
@@ -363,9 +368,22 @@ fn preview_lines(th: &Theme) -> Vec<Line<'static>> {
 
 fn render_header(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
     let p = &th.pal;
+    // "● web :7878 · 1 viewer │" in front of the counts while it's on
+    let web = app.web.as_ref().map(|w| {
+        let who = match w.viewers() {
+            0 => "no viewers".to_string(),
+            1 => "1 viewer".to_string(),
+            n => format!("{n} viewers"),
+        };
+        let place = if w.lan() { "lan" } else { "web" };
+        (format!("{place} :{} · {who} ", w.port()), w.viewers() > 0)
+    });
+    let web_w = web
+        .as_ref()
+        .map_or(0, |(t, _)| t.chars().count() as u16 + 4);
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(10), Constraint::Length(52)])
+        .constraints([Constraint::Min(10), Constraint::Length(52 + web_w)])
         .split(area);
 
     f.render_widget(Paragraph::new(banner::wordmark(th)), cols[0]);
@@ -375,6 +393,14 @@ fn render_header(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
     let missing = count(ToolStatus::Missing);
 
     let mut stats = Vec::new();
+    if let Some((text, live)) = web {
+        stats.push(Span::styled(
+            th.glyph.installed,
+            th.fg(if live { p.ok } else { p.dim }),
+        ));
+        stats.push(Span::styled(format!(" {text}"), th.fg(p.accent)));
+        stats.push(Span::styled("│ ", th.fg(p.border)));
+    }
     let running = app.running_count();
     if running > 0 {
         let spin = th.glyph.spinner;
@@ -1020,7 +1046,7 @@ fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             } else {
                 Span::styled(format!(" {}", app.status_line), th.fg(p.fg))
             };
-            Line::from(vec![
+            let mut spans = vec![
                 status,
                 Span::raw("  "),
                 key("Enter"),
@@ -1035,11 +1061,28 @@ fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
                 sep(" terminals · "),
                 key("t"),
                 sep(" theme · "),
+            ];
+            let tail = [
                 Span::styled("?", th.strong(p.accent)),
                 sep(" all keys · "),
                 key("q"),
                 sep(" quit"),
-            ])
+            ];
+            // the web hint only when it fits: "q quit" must stay visible
+            let web = [
+                key("w"),
+                sep(if app.web.is_some() {
+                    " web on · "
+                } else {
+                    " web · "
+                }),
+            ];
+            let width = |s: &[Span]| s.iter().map(|s| s.width()).sum::<usize>();
+            if width(&spans) + width(&web) + width(&tail) <= area.width as usize {
+                spans.extend(web);
+            }
+            spans.extend(tail);
+            Line::from(spans)
         }
     };
     f.render_widget(Paragraph::new(content), area);

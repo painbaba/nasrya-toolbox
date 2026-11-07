@@ -122,6 +122,18 @@ Pick a tool with `↑/↓` (or `/` to filter), press `i` to install it and `Ente
 - **Per-run log files** for every run and install: the command, all output (including what you
   typed), the exit code and timestamps. Ready to use as evidence in a report.
 
+### 🌐 The same session in your browser
+The terminal stays the main app, and the browser is a second window onto the **same live
+session**, the way Claude Code works.
+- At start-up, choose **Continue in terminal** or **Open in browser** (`--web` / `--no-web` skip
+  the question). In the dashboard, `w` starts or stops the web view and `o` opens it.
+- Run, install, stop, type into a tool, close terminals and identify hashes from either side.
+  Output streams to both, and every run log records where it was started from.
+- The browser adds a **grid** of all four terminals, **log downloads**, **toasts** and optional
+  **desktop notifications** when a long scan finishes.
+- **On your network:** `--lan` (or `W` in the dashboard) serves your LAN too, and the terminal
+  prints the link to share. It's plain HTTP, so only use it on networks you trust.
+
 ### 🧩 Config-driven, honest by design
 - Every tool is a **YAML entry**, so you add one without touching code.
 - **Four launch modes:** `stream` (CLI in the pane), `gui` (desktop apps), `web` (start a server,
@@ -172,6 +184,9 @@ winsploit --help, -h      show help
 winsploit --version, -V   show version
 
 --catalog <path>          use a specific tools.yaml (works with or without `list`)
+--web / --no-web          open the web view too / terminal only (skips the start-up question)
+--lan                     serve the web view to your local network, not only this machine
+--port <n>                web view port (default 7878, else a free one)
 ```
 
 ### Dashboard keys
@@ -189,6 +204,7 @@ winsploit --version, -V   show version
 | `c` | Cancel the running process (kills the whole tree) |
 | `h` | Identify a hash (built in, offline) |
 | `t` | Appearance: theme, borders, glyphs, overlays (live preview) |
+| `w` · `W` · `o` | Web view: start / stop · serve your LAN · open it in the browser |
 | `?` | Show all keys |
 | `q` | Quit |
 
@@ -371,6 +387,12 @@ that:
   command-string concatenation. Programs are resolved by PATH × PATHEXT (never the current
   directory), and `.cmd`/`.bat` shims go through Rust's escaped cmd.exe path.
 - **Audit trail.** Every run and install leaves a timestamped log.
+- **The web view is locked down.** It's off by default and lives only as long as the terminal
+  session. It listens on `127.0.0.1` unless you pass `--lan`. Each session has a random 128-bit
+  link, traded for an `HttpOnly; SameSite=Strict` cookie. Requests must address the server by IP
+  (DNS-rebinding guard) and changes must come from the page itself as JSON (CSRF guard). The
+  browser sends the same actions as the keys, never a command line, and the sign-in token is
+  masked on the page.
 
 ## 🏗️ Architecture
 
@@ -401,7 +423,8 @@ flowchart LR
 | `hashid.rs` | Built-in hash identifier |
 | `runner.rs` | Spawn, stream, stdin pipe, detach (gui/web), kill tree, output cleaning |
 | `runlog.rs` | Per-run log files |
-| `app.rs` | State machine, launch/install control, scrollback, search, filter |
+| `app.rs` | State machine; every key and web request becomes an `Action` handled by `App::apply` |
+| `web.rs` · `web/` | Web view: local HTTP server, event stream, sign-in, and the embedded page |
 | `ui.rs` · `banner.rs` | Dashboard rendering, ASCII splash and wordmark |
 | `bucket_tests.rs` | Validates every manifest in `bucket/` against the catalog |
 
