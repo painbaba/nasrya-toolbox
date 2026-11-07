@@ -129,6 +129,13 @@ pass `--catalog .\tools.yaml` to use it on purpose. The active path is shown in 
 | `h` | identify a hash (built in, works offline) |
 | `q` | quit |
 
+**Logs:** every tool run and install is also written to
+`%LOCALAPPDATA%
+asrya\logs\<UTC timestamp>-<tool>.log`: the command, every output line
+(including what you typed into the tool), the exit code and start/end times. The path is shown
+when the run starts. Handy as evidence for a report, and nothing is lost when output scrolls
+past the in-memory buffer.
+
 **Editing the args / hash prompt:** `←/→` move, `Ctrl+←/→` jump words, `Home/End` (or
 `Ctrl+A/E`), `Del`, `Ctrl+Backspace` / `Ctrl+W` delete a word, `Ctrl+U` clear to the start,
 `↑/↓` cycle through the arguments you used before with that tool (per session). Pasting a
@@ -226,6 +233,7 @@ envpath.rs     picks up PATH changes after installs    ──
 args.rs        quote-aware argument splitting          ──
 hashid.rs      built-in hash identifier                ──
 editor.rs      args prompt line editor + history       ──
+runlog.rs      per-run log files                       ──
 runner.rs      spawn + stream / detach + kill tree      ──
 app.rs         state machine, launch/install control    ──
 ui.rs          dashboard rendering                       ── presentation layer

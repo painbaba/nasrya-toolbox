@@ -17,6 +17,7 @@ use crate::envpath;
 use crate::hashid;
 use crate::install;
 use crate::registry::{Catalog, Install, Launch, Tool};
+use crate::runlog;
 use crate::runner::{self, AppEvent};
 use crate::scoop;
 use crate::ui;
@@ -68,6 +69,8 @@ pub struct App {
     history: History,
     pub running: bool,
     pub running_pid: Option<u32>,
+    /// Log file of the current run / install.
+    log: Option<runlog::RunLog>,
     /// stdin of the running tool (None for installs, or after Ctrl+D)
     proc_stdin: Option<std::process::ChildStdin>,
     pub status_line: String,
@@ -115,6 +118,7 @@ impl App {
             running: false,
             running_pid: None,
             proc_stdin: None,
+            log: None,
             status_line: "detecting tools…".into(),
             tick: 0,
             detecting: false,
@@ -228,11 +232,19 @@ impl App {
 
     fn on_runner_event(&mut self, ev: AppEvent) {
         match ev {
-            AppEvent::Output(l) => self.push(l),
+            AppEvent::Output(l) => {
+                if let Some(log) = self.log.as_mut() {
+                    log.line(&l);
+                }
+                self.push(l)
+            }
             AppEvent::Exited(code) => {
                 self.running = false;
                 self.running_pid = None;
                 self.proc_stdin = None;
+                if let Some(log) = self.log.take() {
+                    log.finish(code);
+                }
                 if self.mode == Mode::StdinInput {
                     self.mode = Mode::Browsing;
                     self.editor.set("");
@@ -459,7 +471,12 @@ impl App {
             .and_then(|_| stdin.write_all(b"\n"))
             .and_then(|_| stdin.flush());
         match res {
-            Ok(()) => self.push(format!("> {line}")),
+            Ok(()) => {
+                if let Some(log) = self.log.as_mut() {
+                    log.line(&format!("> {line}"));
+                }
+                self.push(format!("> {line}"))
+            }
             Err(e) => {
                 self.proc_stdin = None;
                 self.push(format!("[err] couldn't send input: {e}"));
@@ -612,9 +629,11 @@ impl App {
     /// Run `cmd args` with output streamed into the pane. Returns whether it
     /// started.
     fn start_streaming(&mut self, name: &str, cmd: &str, args: &[String]) -> bool {
-        self.push(format!("$ {} {}", cmd, args::join(args)));
+        let shown = format!("{} {}", cmd, args::join(args));
+        self.push(format!("$ {shown}"));
         match runner::spawn_streaming(runner::tool_command(cmd, args), self.tx.clone(), true) {
             Ok(sp) => {
+                self.open_log(name, &shown);
                 let pid = sp.pid;
                 self.proc_stdin = sp.stdin;
                 self.running = true;
@@ -626,6 +645,17 @@ impl App {
                 self.push(format!("failed to launch: {e}"));
                 false
             }
+        }
+    }
+
+    /// Start this run's log file and say where it is.
+    fn open_log(&mut self, name: &str, command: &str) {
+        match runlog::RunLog::create(&runlog::log_dir(), name, command) {
+            Ok(log) => {
+                self.push(format!(":: log: {}", log.path().display()));
+                self.log = Some(log);
+            }
+            Err(e) => self.push(format!("[err] couldn't create a log file: {e}")),
         }
     }
 
@@ -694,6 +724,7 @@ impl App {
         }
         match runner::spawn_streaming(cmd, self.tx.clone(), false) {
             Ok(sp) => {
+                self.open_log(&format!("install-{name}"), &line);
                 self.running = true;
                 self.running_pid = Some(sp.pid);
                 self.installing = true;

@@ -16,6 +16,7 @@ mod envpath;
 mod hashid;
 mod install;
 mod registry;
+mod runlog;
 mod runner;
 mod scoop;
 mod ui;
