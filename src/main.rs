@@ -12,6 +12,7 @@ mod banner;
 mod detect;
 mod registry;
 mod runner;
+mod scoop;
 mod ui;
 
 use anyhow::Result;
@@ -32,7 +33,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some("list") => {
-            let tools = registry::load(registry::registry_path())?;
+            let tools = registry::load(registry::registry_path())?.tools;
             println!("nasrya — {} tools", tools.len());
             let name_w = tools
                 .iter()
@@ -66,13 +67,13 @@ fn main() -> Result<()> {
 }
 
 fn run_tui() -> Result<()> {
-    let tools = registry::load(registry::registry_path())?;
-    if tools.is_empty() {
+    let catalog = registry::load(registry::registry_path())?;
+    if catalog.tools.is_empty() {
         eprintln!("nasrya: no tools found in tools.yaml");
         return Ok(());
     }
     let mut terminal = ratatui::init();
-    let result = App::new(tools).run(&mut terminal);
+    let result = App::new(catalog).run(&mut terminal);
     ratatui::restore();
     result
 }

@@ -9,12 +9,19 @@
 #   scoop       the scoop package name used to install
 #   run_cmd     the command actually launched
 #   args_hint   arguments prefilled when you press Enter (edit before running)
-#   bucket      (optional) scoop bucket the package lives in; main-bucket tools omit this
+#   bucket      (optional) scoop bucket the package lives in; main-bucket tools omit this.
+#               If the bucket isn't added yet, nasrya adds it before installing.
+#
+# buckets: maps a bucket name to its git URL. Only needed for buckets Scoop
+# doesn't know by name (extras, versions, java, ... need no entry).
 #
 # NOTE ON WIRELESS: live Wi-Fi capture / monitor-mode / injection do NOT work on
 # Windows with normal adapters. Tools like aircrack-ng are offline-only here.
 # Real wireless attacks need Linux + a supported USB adapter. Kept out of this
 # subset on purpose so the skeleton stays honest about what actually works.
+
+buckets:
+  security: https://github.com/opsqw/scoop-security   # formerly whoopscs/scoop-security
 
 tools:
   - name: nmap

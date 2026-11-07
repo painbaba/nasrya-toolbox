@@ -85,7 +85,9 @@ cargo build --release
 .\target\release\nasrya
 ```
 
-Some tools live outside Scoop's main bucket. Add these buckets before installing them:
+Some tools live outside Scoop's main bucket. Pressing `i` adds the right bucket automatically
+the first time it's needed (URLs for non-standard buckets come from the `buckets:` map in
+`tools.yaml`). To add them by hand instead:
 
 ```powershell
 # nuclei, httpx, subfinder, katana, …
@@ -133,6 +135,9 @@ Edit [`tools.yaml`](tools.yaml) — no code changes:
     args_hint: "dir -u https://example.com -w wordlist.txt"
     bucket: security       # optional: scoop bucket it lives in
 ```
+
+A bucket that Scoop doesn't know by name also needs its URL in the top-level `buckets:` map,
+so nasrya can add it on first install.
 
 ## Architecture
 

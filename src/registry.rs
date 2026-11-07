@@ -1,6 +1,7 @@
 //! Tool registry: loads the config-driven catalog from `tools.yaml`.
 //! Adding a tool is a YAML edit, never a code change.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -27,9 +28,14 @@ pub struct Tool {
     pub bucket: Option<String>,
 }
 
+/// The whole catalog file.
 #[derive(Debug, Deserialize)]
-struct Registry {
-    tools: Vec<Tool>,
+pub struct Catalog {
+    pub tools: Vec<Tool>,
+    /// Extra Scoop buckets: name -> git URL. Buckets Scoop already knows by
+    /// name (extras, versions, ...) don't need an entry.
+    #[serde(default)]
+    pub buckets: BTreeMap<String, String>,
 }
 
 /// Find `tools.yaml`: prefer the current directory, then fall back to the
@@ -50,10 +56,9 @@ pub fn registry_path() -> PathBuf {
     cwd.to_path_buf()
 }
 
-pub fn load(path: impl AsRef<Path>) -> Result<Vec<Tool>> {
+pub fn load(path: impl AsRef<Path>) -> Result<Catalog> {
     let path = path.as_ref();
     let text = fs::read_to_string(path)
         .with_context(|| format!("reading tool registry {}", path.display()))?;
-    let reg: Registry = serde_yaml::from_str(&text).context("parsing tools.yaml")?;
-    Ok(reg.tools)
+    serde_yaml::from_str(&text).context("parsing tools.yaml")
 }

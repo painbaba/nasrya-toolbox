@@ -17,17 +17,17 @@ pub enum AppEvent {
     Exited(Option<i32>),
 }
 
-/// Spawn `program` with `args`, streaming output to `tx`. Returns the child PID.
-pub fn spawn_streaming(
-    program: &str,
-    args: &[String],
-    tx: Sender<AppEvent>,
-) -> std::io::Result<u32> {
-    let mut child = Command::new(resolve_program(program))
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+/// Build the command that runs a tool: `program` resolved the way Windows
+/// would (see `resolve_program`) plus its arguments.
+pub fn tool_command(program: &str, args: &[String]) -> Command {
+    let mut cmd = Command::new(resolve_program(program));
+    cmd.args(args);
+    cmd
+}
+
+/// Spawn `cmd`, streaming its output to `tx`. Returns the child PID.
+pub fn spawn_streaming(mut cmd: Command, tx: Sender<AppEvent>) -> std::io::Result<u32> {
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
 
     let pid = child.id();
 

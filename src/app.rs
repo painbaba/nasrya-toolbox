@@ -1,5 +1,6 @@
 //! Application state and the main event loop.
 
+use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
@@ -10,8 +11,9 @@ use ratatui::DefaultTerminal;
 use crate::args;
 use crate::banner;
 use crate::detect;
-use crate::registry::Tool;
+use crate::registry::{Catalog, Tool};
 use crate::runner::{self, AppEvent};
+use crate::scoop;
 use crate::ui;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -35,6 +37,7 @@ enum Screen {
 
 pub struct App {
     pub tools: Vec<Tool>,
+    buckets: BTreeMap<String, String>,
     pub status: Vec<ToolStatus>,
     pub selected: usize,
     pub output: Vec<String>,
@@ -51,11 +54,13 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(tools: Vec<Tool>) -> Self {
+    pub fn new(catalog: Catalog) -> Self {
+        let Catalog { tools, buckets } = catalog;
         let (tx, rx) = mpsc::channel();
         let n = tools.len();
         App {
             tools,
+            buckets,
             status: vec![ToolStatus::Unknown; n],
             selected: 0,
             output: vec![
@@ -225,7 +230,7 @@ impl App {
         };
         self.push(format!("$ {} {}", cmd, args::join(&args)));
 
-        match runner::spawn_streaming(&cmd, &args, self.tx.clone()) {
+        match runner::spawn_streaming(runner::tool_command(&cmd, &args), self.tx.clone()) {
             Ok(pid) => {
                 self.running = true;
                 self.running_pid = Some(pid);
@@ -244,21 +249,33 @@ impl App {
         let name = self.tools[self.selected].name.clone();
         let bucket = self.tools[self.selected].bucket.clone();
 
-        if let Some(b) = &bucket {
-            self.push(format!(
-                "note: {name} lives in scoop bucket '{b}' — run `scoop bucket add {b} <url>` first if install fails."
-            ));
+        if !detect::is_installed("scoop") {
+            self.push("[err] scoop isn't installed (or not on PATH). Install it first:");
+            self.push("[err]   irm get.scoop.sh | iex      (in PowerShell; see https://scoop.sh)");
+            return;
         }
-        self.push(format!("$ scoop install {pkg}"));
 
-        // scoop is a shim; invoke through cmd /C so the .cmd shim resolves.
-        let args = vec![
-            "/C".to_string(),
-            "scoop".to_string(),
-            "install".to_string(),
-            pkg,
-        ];
-        match runner::spawn_streaming("cmd", &args, self.tx.clone()) {
+        let added = bucket.as_deref().is_some_and(scoop::bucket_added);
+        let steps = match scoop::plan_install(&pkg, bucket.as_deref(), added, &self.buckets) {
+            Ok(s) => s,
+            Err(e) => {
+                self.push(format!("[err] can't install {name}: {e}"));
+                return;
+            }
+        };
+        let line = steps.join(" && ");
+        self.push(format!("$ {line}"));
+
+        // scoop is a .cmd/.ps1 shim, so go through cmd. Every token in `line`
+        // was checked by plan_install to be free of cmd metacharacters, and
+        // `&&` stops the install if adding the bucket failed. /D skips any
+        // AutoRun commands from the registry.
+        let mut cmd = std::process::Command::new("cmd");
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.raw_arg(format!("/D /C {line}"));
+        }
+        match runner::spawn_streaming(cmd, self.tx.clone()) {
             Ok(pid) => {
                 self.running = true;
                 self.running_pid = Some(pid);
