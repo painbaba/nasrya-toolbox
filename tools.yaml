@@ -74,3 +74,11 @@ tools:
     scoop: gobuster
     run_cmd: gobuster
     args_hint: "dir -u https://example.com -w wordlist.txt"
+
+  - name: feroxbuster
+    category: web
+    description: Fast recursive content discovery
+    exe: feroxbuster
+    scoop: feroxbuster
+    run_cmd: feroxbuster
+    args_hint: "-u https://example.com"
