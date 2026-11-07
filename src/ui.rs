@@ -1,27 +1,18 @@
-//! Main dashboard rendering.
+//! Main dashboard rendering. Every colour, glyph and border comes from the
+//! active `Theme` (see theme.rs), so the `t` overlay can restyle it live.
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, Mode, ToolStatus};
+use crate::app::{App, Appearance, Mode, ToolStatus};
 use crate::banner;
-
-// Cohesive palette: cyan primary with semantic accents.
-const CYAN: Color = Color::Rgb(80, 210, 230);
-const CYAN_DIM: Color = Color::Rgb(45, 120, 135);
-const GREEN: Color = Color::Rgb(120, 230, 150);
-const RED: Color = Color::Rgb(255, 110, 120);
-const YELLOW: Color = Color::Rgb(240, 215, 120);
-const DIM: Color = Color::Rgb(95, 110, 130);
-const FG: Color = Color::Rgb(215, 225, 235);
-const INK: Color = Color::Rgb(10, 14, 20);
-
-const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+use crate::theme::{Backdrop, Field, OverlayPos, Theme, ThemeName};
 
 pub fn render(f: &mut Frame, app: &App) {
+    let th = app.settings.theme();
     let area = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -32,18 +23,20 @@ pub fn render(f: &mut Frame, app: &App) {
         ])
         .split(area);
 
-    render_header(f, app, chunks[0]);
+    render_header(f, app, &th, chunks[0]);
 
     let body = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(36), Constraint::Percentage(64)])
         .split(chunks[1]);
 
-    render_tool_list(f, app, body[0]);
-    render_output(f, app, body[1]);
-    render_footer(f, app, chunks[2]);
-    if app.show_help {
-        render_help(f, area);
+    render_tool_list(f, app, &th, body[0]);
+    render_output(f, app, &th, body[1]);
+    render_footer(f, app, &th, chunks[2]);
+    if let Some(ap) = &app.appearance {
+        render_appearance(f, app, ap, &th, area);
+    } else if app.show_help {
+        render_help(f, &th, area);
     }
 }
 
@@ -65,6 +58,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("PgUp PgDn", "scroll the output · Home top · End follow"),
     ("f  n  N", "find in the output · older / newer match"),
     ("h", "identify a hash (built in)"),
+    ("t", "appearance: theme, borders, glyphs, overlays"),
     ("?", "this help"),
     ("q  Esc", "quit"),
     ("", ""),
@@ -74,7 +68,61 @@ pub const HELP: &[(&str, &str)] = &[
     ),
 ];
 
-fn render_help(f: &mut Frame, area: Rect) {
+// ---------------------------------------------------------------- overlays
+
+/// Where an overlay of `w` x `h` goes: centered, or docked full-width just
+/// above the footer the way Claude Code shows its pickers. Also fades the
+/// dashboard behind it when the backdrop is set to dim.
+fn overlay_area(f: &mut Frame, th: &Theme, area: Rect, w: u16, h: u16) -> Rect {
+    let h = h.min(area.height);
+    let popup = match th.overlay {
+        OverlayPos::Centered => {
+            let w = w.min(area.width);
+            Rect {
+                x: area.x + area.width.saturating_sub(w) / 2,
+                y: area.y + area.height.saturating_sub(h) / 2,
+                width: w,
+                height: h,
+            }
+        }
+        OverlayPos::Docked => {
+            // keep the footer row visible; leave the header if there's room
+            let h = h.min(area.height.saturating_sub(1).max(1));
+            Rect {
+                x: area.x,
+                y: (area.y + area.height).saturating_sub(1 + h).max(area.y),
+                width: area.width,
+                height: h,
+            }
+        }
+    };
+    if th.backdrop == Backdrop::Dim {
+        let buf = f.buffer_mut();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                let cell = &mut buf[(x, y)];
+                cell.set_fg(th.pal.dim);
+                cell.set_bg(Color::Reset);
+                cell.modifier = Modifier::DIM;
+            }
+        }
+    }
+    f.render_widget(Clear, popup);
+    popup
+}
+
+/// The frame every overlay shares: accent border, bold title, hint bottom right.
+fn overlay_block<'a>(th: &Theme, title: &'a str, hint: &'a str) -> Block<'a> {
+    th.block(th.pal.accent)
+        .title(Span::styled(format!(" {title} "), th.strong(th.pal.accent)))
+        .title_bottom(
+            Line::from(Span::styled(format!(" {hint} "), th.fg(th.pal.dim)))
+                .alignment(Alignment::Right),
+        )
+}
+
+fn render_help(f: &mut Frame, th: &Theme, area: Rect) {
+    let p = &th.pal;
     let key_w = HELP
         .iter()
         .map(|(k, _)| k.chars().count())
@@ -84,49 +132,186 @@ fn render_help(f: &mut Frame, area: Rect) {
         .iter()
         .map(|(k, d)| {
             Line::from(vec![
-                Span::styled(
-                    format!(" {k:<key_w$}  "),
-                    Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(d.to_string(), Style::default().fg(FG)),
+                Span::styled(format!(" {k:<key_w$}  "), th.strong(p.accent)),
+                Span::styled(d.to_string(), th.fg(p.fg)),
             ])
         })
         .collect();
-    let w = (lines.iter().map(|l| l.width()).max().unwrap_or(40) as u16 + 3).min(area.width);
-    let h = (lines.len() as u16 + 2).min(area.height);
-    let popup = Rect {
-        x: area.x + area.width.saturating_sub(w) / 2,
-        y: area.y + area.height.saturating_sub(h) / 2,
-        width: w,
-        height: h,
-    };
-    f.render_widget(ratatui::widgets::Clear, popup);
+    let w = lines.iter().map(|l| l.width()).max().unwrap_or(40) as u16 + 3;
+    let h = lines.len() as u16 + 2;
+    let popup = overlay_area(f, th, area, w, h);
     f.render_widget(
-        Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(CYAN))
-                .title(Span::styled(
-                    " keys ",
-                    Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-                ))
-                .title_bottom(
-                    Line::from(Span::styled(" any key to close ", Style::default().fg(DIM)))
-                        .alignment(Alignment::Right),
-                ),
-        ),
+        Paragraph::new(lines).block(overlay_block(th, "keys", "any key to close")),
         popup,
     );
 }
 
-fn render_header(f: &mut Frame, app: &App, area: Rect) {
+/// The `t` overlay: settings on the left, a live sample of the dashboard
+/// on the right (stacked when narrow). Everything, including this panel,
+/// is already drawn with the previewed settings.
+fn render_appearance(f: &mut Frame, app: &App, ap: &Appearance, th: &Theme, area: Rect) {
+    let p = &th.pal;
+    let s = &app.settings;
+    let g = th.glyph;
+
+    let label_w = Field::ALL
+        .iter()
+        .map(|x| x.label().chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut rows: Vec<Line> = vec![Line::raw("")];
+    for (i, field) in Field::ALL.iter().enumerate() {
+        let on = i == ap.cursor;
+        let cursor = if on { g.pointer } else { "  " };
+        let value = s.value(*field);
+        let mut spans = vec![
+            Span::styled(format!(" {cursor}"), th.fg(p.accent)),
+            Span::styled(
+                format!("{:<label_w$}  ", field.label()),
+                if on { th.strong(p.fg) } else { th.fg(p.dim) },
+            ),
+        ];
+        if on {
+            spans.push(Span::styled(format!("{} ", g.left), th.fg(p.accent)));
+            spans.push(Span::styled(value, th.strong(p.accent)));
+            spans.push(Span::styled(format!(" {}", g.right), th.fg(p.accent)));
+        } else {
+            spans.push(Span::styled(format!("  {value}"), th.fg(p.fg)));
+        }
+        rows.push(Line::from(spans));
+    }
+    rows.push(Line::raw(""));
+    // the theme list, numbered like Claude Code's /theme
+    for (i, t) in ThemeName::ALL.iter().enumerate() {
+        let cur = *t == s.theme;
+        rows.push(Line::from(vec![
+            Span::styled(
+                format!("   {} ", i + 1),
+                if cur {
+                    th.strong(p.accent)
+                } else {
+                    th.fg(p.dim)
+                },
+            ),
+            Span::styled(
+                format!("{}{}", t.label(), if cur { "  ✓" } else { "" }),
+                if cur { th.fg(p.fg) } else { th.fg(p.dim) },
+            ),
+        ]));
+    }
+
+    let preview = preview_lines(th);
+    let left_w = rows.iter().map(|l| l.width()).max().unwrap_or(30) as u16 + 2;
+    let right_w = preview.iter().map(|l| l.width()).max().unwrap_or(30) as u16 + 4;
+    let side_by_side = area.width >= left_w + right_w + 4;
+    let w = if side_by_side {
+        left_w + right_w + 3
+    } else {
+        left_w.max(right_w) + 2
+    };
+    let h = if side_by_side {
+        rows.len().max(preview.len() + 2) as u16 + 2
+    } else {
+        (rows.len() + preview.len() + 2) as u16 + 2
+    };
+    let popup = overlay_area(f, th, area, w, h);
+    let block = overlay_block(
+        th,
+        "appearance",
+        "↑↓ choose · ←→ change · 1-7 theme · Enter save · Esc cancel",
+    );
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    let parts = Layout::default()
+        .direction(if side_by_side {
+            Direction::Horizontal
+        } else {
+            Direction::Vertical
+        })
+        .constraints([
+            Constraint::Length(if side_by_side {
+                left_w
+            } else {
+                rows.len() as u16
+            }),
+            Constraint::Min(0),
+        ])
+        .split(inner);
+    f.render_widget(Paragraph::new(rows), parts[0]);
+
+    let sample = th
+        .block(p.border)
+        .title(Span::styled(" preview ", th.fg(p.dim)));
+    let sample_area = if side_by_side {
+        Rect {
+            x: parts[1].x + 1,
+            y: parts[1].y + 1,
+            width: right_w.min(parts[1].width.saturating_sub(2)),
+            height: (preview.len() as u16 + 2).min(parts[1].height.saturating_sub(1)),
+        }
+    } else {
+        parts[1]
+    };
+    f.render_widget(Paragraph::new(preview).block(sample), sample_area);
+}
+
+/// A few rows that exercise every palette slot.
+fn preview_lines(th: &Theme) -> Vec<Line<'static>> {
+    let p = &th.pal;
+    let g = th.glyph;
+    let tool = |icon: &'static str, c, name: &'static str, cat: &'static str| {
+        Line::from(vec![
+            Span::styled(format!("{icon} "), th.fg(c)),
+            Span::styled(format!("{name:<9}"), th.strong(p.fg)),
+            Span::styled(format!(" {cat}"), th.fg(p.dim)),
+        ])
+    };
+    vec![
+        Line::from(vec![
+            Span::styled(g.pointer, th.emph(Style::default().fg(p.ink).bg(p.accent))),
+            Span::styled(
+                "nmap      recon    ",
+                th.emph(Style::default().fg(p.ink).bg(p.accent)),
+            ),
+        ]),
+        tool(g.installed, p.ok, "ffuf", "web"),
+        tool(g.missing, p.err, "sqlmap", "web"),
+        tool(g.conflict, p.warn, "john", "cracking"),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "$ nmap -sV scanme.nmap.org",
+            line_style(th, "$ "),
+        )),
+        Line::from(Span::styled("22/tcp open  ssh", th.fg(p.fg))),
+        Line::from(vec![
+            Span::styled("80/tcp ", th.fg(p.fg)),
+            Span::styled("open", Style::default().fg(p.fg).bg(p.hit_bg)),
+            Span::styled("  http", th.fg(p.fg)),
+        ]),
+        Line::from(Span::styled("> y", line_style(th, "> "))),
+        Line::from(Span::styled(
+            "[err] host seems down",
+            line_style(th, "[err]"),
+        )),
+        Line::from(Span::styled(":: exit 0 · 4.2s", line_style(th, "::"))),
+        Line::from(vec![
+            Span::styled(format!("{} running ", g.spinner[0]), th.strong(p.warn)),
+            Span::styled("pid 4242", th.fg(p.dim)),
+        ]),
+    ]
+}
+
+// --------------------------------------------------------------- dashboard
+
+fn render_header(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
+    let p = &th.pal;
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(10), Constraint::Length(28)])
         .split(area);
 
-    f.render_widget(Paragraph::new(banner::wordmark()), cols[0]);
+    f.render_widget(Paragraph::new(banner::wordmark(th)), cols[0]);
 
     let installed = app
         .status
@@ -140,20 +325,19 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         .count();
 
     let stats = Line::from(vec![
-        Span::styled("●", Style::default().fg(GREEN)),
-        Span::styled(format!(" {installed} "), Style::default().fg(FG)),
-        Span::styled("○", Style::default().fg(RED)),
-        Span::styled(format!(" {missing} "), Style::default().fg(FG)),
-        Span::styled(
-            format!("· {} tools ", app.tools.len()),
-            Style::default().fg(DIM),
-        ),
+        Span::styled(th.glyph.installed, th.fg(p.ok)),
+        Span::styled(format!(" {installed} "), th.fg(p.fg)),
+        Span::styled(th.glyph.missing, th.fg(p.err)),
+        Span::styled(format!(" {missing} "), th.fg(p.fg)),
+        Span::styled(format!("· {} tools ", app.tools.len()), th.fg(p.dim)),
     ])
     .alignment(Alignment::Right);
     f.render_widget(Paragraph::new(stats), cols[1]);
 }
 
-fn render_tool_list(f: &mut Frame, app: &App, area: Rect) {
+fn render_tool_list(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
+    let p = &th.pal;
+    let g = th.glyph;
     // Pad names to the longest one so the category column stays aligned.
     let name_w = app
         .tools
@@ -167,16 +351,15 @@ fn render_tool_list(f: &mut Frame, app: &App, area: Rect) {
         .map(|&i| {
             let t = &app.tools[i];
             let (icon, color) = match app.status[i] {
-                ToolStatus::Installed => ("●", GREEN),
-                ToolStatus::Missing => ("○", RED),
-                ToolStatus::Unknown => ("·", DIM),
-                ToolStatus::Conflict => ("◐", YELLOW),
+                ToolStatus::Installed => (g.installed, p.ok),
+                ToolStatus::Missing => (g.missing, p.err),
+                ToolStatus::Unknown => (g.unknown, p.dim),
+                ToolStatus::Conflict => (g.conflict, p.warn),
             };
-            let name_style = Style::default().fg(FG).add_modifier(Modifier::BOLD);
             let line = Line::from(vec![
-                Span::styled(format!("{icon} "), Style::default().fg(color)),
-                Span::styled(format!("{:<name_w$}", t.name), name_style),
-                Span::styled(format!(" {}", t.category), Style::default().fg(DIM)),
+                Span::styled(format!("{icon} "), th.fg(color)),
+                Span::styled(format!("{:<name_w$}", t.name), th.strong(p.fg)),
+                Span::styled(format!(" {}", t.category), th.fg(p.dim)),
             ]);
             ListItem::new(line)
         })
@@ -184,13 +367,10 @@ fn render_tool_list(f: &mut Frame, app: &App, area: Rect) {
 
     let sel_pos = visible.iter().position(|&i| i == app.selected);
     let pos = match sel_pos {
-        Some(p) => format!(" {}/{} ", p + 1, visible.len()),
+        Some(i) => format!(" {}/{} ", i + 1, visible.len()),
         None => format!(" 0/{} ", visible.len()),
     };
-    let mut title = vec![Span::styled(
-        " tools ",
-        Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-    )];
+    let mut title = vec![Span::styled(" tools ", th.strong(p.accent))];
     if !app.filter.trim().is_empty() {
         title.push(Span::styled(
             format!(
@@ -199,43 +379,29 @@ fn render_tool_list(f: &mut Frame, app: &App, area: Rect) {
                 visible.len(),
                 app.tools.len()
             ),
-            Style::default().fg(YELLOW),
+            th.fg(p.warn),
         ));
     }
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(CYAN_DIM))
-                .title(Line::from(title))
-                .title_bottom(
-                    Line::from(Span::styled(pos, Style::default().fg(DIM)))
-                        .alignment(Alignment::Right),
-                ),
-        )
-        .highlight_style(
-            Style::default()
-                .bg(CYAN)
-                .fg(INK)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▸ ");
+    let list =
+        List::new(items)
+            .block(th.block(p.border).title(Line::from(title)).title_bottom(
+                Line::from(Span::styled(pos, th.fg(p.dim))).alignment(Alignment::Right),
+            ))
+            .highlight_style(th.emph(Style::default().bg(p.accent).fg(p.ink)))
+            .highlight_symbol(g.pointer);
 
     let mut state = ListState::default();
     state.select(sel_pos);
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn render_output(f: &mut Frame, app: &App, area: Rect) {
+fn render_output(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
+    let p = &th.pal;
     let tool = &app.tools[app.selected];
 
     let title = Line::from(vec![
-        Span::styled(
-            format!(" {} ", tool.name),
-            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(format!("· {} ", tool.description), Style::default().fg(DIM)),
+        Span::styled(format!(" {} ", tool.name), th.strong(p.accent)),
+        Span::styled(format!("· {} ", tool.description), th.fg(p.dim)),
     ]);
 
     // Lines are hard-wrapped here (not by Paragraph) so we know exactly how
@@ -249,21 +415,19 @@ fn render_output(f: &mut Frame, app: &App, area: Rect) {
         vec![
             Line::from(Span::styled(
                 "no output yet".to_string(),
-                Style::default().fg(DIM).add_modifier(Modifier::ITALIC),
+                th.fg(p.dim).add_modifier(Modifier::ITALIC),
             )),
             Line::from(Span::styled(
                 "press Enter to run · i to install".to_string(),
-                Style::default().fg(CYAN_DIM),
+                th.fg(p.border),
             )),
         ]
     } else {
         rows.into_iter()
             .map(|(i, chunk)| {
-                let mut style = line_style(&app.output[i]);
+                let mut style = line_style(th, &app.output[i]);
                 if app.search_hit == Some(i) {
-                    style = style
-                        .bg(Color::Rgb(70, 60, 10))
-                        .add_modifier(Modifier::BOLD);
+                    style = th.emph(style.bg(p.hit_bg));
                 }
                 Line::from(Span::styled(chunk, style))
             })
@@ -271,38 +435,29 @@ fn render_output(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let mut bottom = if app.running {
-        let frame = SPINNER[(app.tick / 2 % SPINNER.len() as u64) as usize];
+        let spin = th.glyph.spinner;
+        let frame = spin[(app.tick / 2 % spin.len() as u64) as usize];
         let pid = app
             .running_pid
             .map(|p| format!("pid {p} "))
             .unwrap_or_default();
         Line::from(vec![
-            Span::styled(
-                format!(" {frame} running "),
-                Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(pid, Style::default().fg(DIM)),
+            Span::styled(format!(" {frame} running "), th.strong(p.warn)),
+            Span::styled(pid, th.fg(p.dim)),
         ])
     } else {
-        Line::from(Span::styled(" idle ", Style::default().fg(DIM)))
+        Line::from(Span::styled(" idle ", th.fg(p.dim)))
     };
     if app.scroll > 0 {
         bottom.push_span(Span::styled(
             format!(" ↑ {} rows up · End to follow ", app.scroll.min(max_scroll)),
-            Style::default().fg(CYAN),
+            th.fg(p.info),
         ));
     }
 
-    let border_color = if app.running { YELLOW } else { CYAN_DIM };
+    let border_color = if app.running { p.warn } else { p.border };
 
-    let para = Paragraph::new(text).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(border_color))
-            .title(title)
-            .title_bottom(bottom),
-    );
+    let para = Paragraph::new(text).block(th.block(border_color).title(title).title_bottom(bottom));
     f.render_widget(para, area);
 }
 
@@ -349,36 +504,37 @@ pub fn visible_rows(
 }
 
 /// Colour for an output line, by its prefix (applies to all its wrapped rows).
-fn line_style(l: &str) -> Style {
+fn line_style(th: &Theme, l: &str) -> Style {
+    let p = &th.pal;
     if l.starts_with("[err]") {
-        Style::default().fg(RED)
+        th.fg(p.err)
     } else if l.starts_with("> ") {
-        Style::default().fg(CYAN)
+        th.fg(p.info)
     } else if l.starts_with("$ ") {
-        Style::default().fg(YELLOW).add_modifier(Modifier::BOLD)
+        th.strong(p.warn)
     } else if l.starts_with("──") || l.starts_with("::") {
-        Style::default().fg(DIM).add_modifier(Modifier::ITALIC)
+        th.fg(p.dim).add_modifier(Modifier::ITALIC)
     } else {
-        Style::default().fg(FG)
+        th.fg(p.fg)
     }
 }
 
-fn render_footer(f: &mut Frame, app: &App, area: Rect) {
+fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
+    let p = &th.pal;
+    let arrow = th.glyph.arrow;
     let content = match app.mode {
         Mode::Input | Mode::HashInput | Mode::StdinInput | Mode::Filter | Mode::Search => {
-            let (label, help) = match app.mode {
-                Mode::HashInput => (" hash ▸ ", "  Enter identify · Esc cancel"),
-                Mode::StdinInput => (" stdin ▸ ", "  Enter send · Ctrl+D end input · Esc close"),
+            let (name, help) = match app.mode {
+                Mode::HashInput => ("hash", "  Enter identify · Esc cancel"),
+                Mode::StdinInput => ("stdin", "  Enter send · Ctrl+D end input · Esc close"),
                 Mode::Filter => (
-                    " filter ▸ ",
+                    "filter",
                     "  name / category / text · Enter keep · Esc clear",
                 ),
-                Mode::Search => (
-                    " find ▸ ",
-                    "  Enter find in output · then n / N · Esc cancel",
-                ),
-                _ => (" args ▸ ", "  Enter run · ↑↓ history · Esc cancel"),
+                Mode::Search => ("find", "  Enter find in output · then n / N · Esc cancel"),
+                _ => ("args", "  Enter run · ↑↓ history · Esc cancel"),
             };
+            let label = format!(" {name} {arrow} ");
             let label_w = label.chars().count() as u16 + 1; // + the space after it
                                                             // Drop the help text when space is tight; the line itself matters more.
             let help_w = help.chars().count() as u16;
@@ -388,50 +544,47 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
                 .saturating_sub(label_w + if show_help { help_w } else { 0 })
                 .max(1);
             let (visible, col) = app.editor.view(text_w as usize);
-            f.set_cursor_position((area.x + label_w + col as u16, area.y));
+            // no terminal cursor while an overlay sits on top
+            if app.appearance.is_none() && !app.show_help {
+                f.set_cursor_position((area.x + label_w + col as u16, area.y));
+            }
             let mut spans = vec![
-                Span::styled(
-                    label,
-                    Style::default()
-                        .fg(INK)
-                        .bg(YELLOW)
-                        .add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(label, th.emph(Style::default().fg(p.ink).bg(p.warn))),
                 Span::raw(" "),
-                Span::styled(
-                    format!("{visible:<w$}", w = text_w as usize),
-                    Style::default().fg(FG),
-                ),
+                Span::styled(format!("{visible:<w$}", w = text_w as usize), th.fg(p.fg)),
             ];
             if show_help {
-                spans.push(Span::styled(help, Style::default().fg(DIM)));
+                spans.push(Span::styled(help, th.fg(p.dim)));
             }
             Line::from(spans)
         }
-        Mode::Browsing => Line::from(vec![
-            Span::styled(
-                format!(" {} ", app.status_line),
-                Style::default()
-                    .fg(INK)
-                    .bg(CYAN)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("  ", Style::default()),
-            Span::styled("↑/↓", Style::default().fg(CYAN)),
-            Span::styled(" move · ", Style::default().fg(DIM)),
-            Span::styled("Enter", Style::default().fg(CYAN)),
-            Span::styled(" run · ", Style::default().fg(DIM)),
-            Span::styled("i", Style::default().fg(CYAN)),
-            Span::styled(" install · ", Style::default().fg(DIM)),
-            Span::styled("/", Style::default().fg(CYAN)),
-            Span::styled(" filter · ", Style::default().fg(DIM)),
-            Span::styled("c", Style::default().fg(CYAN)),
-            Span::styled(" cancel · ", Style::default().fg(DIM)),
-            Span::styled("?", Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
-            Span::styled(" all keys · ", Style::default().fg(DIM)),
-            Span::styled("q", Style::default().fg(CYAN)),
-            Span::styled(" quit", Style::default().fg(DIM)),
-        ]),
+        Mode::Browsing => {
+            let key = |k: &'static str| Span::styled(k, th.fg(p.accent));
+            let sep = |d: &'static str| Span::styled(d, th.fg(p.dim));
+            Line::from(vec![
+                Span::styled(
+                    format!(" {} ", app.status_line),
+                    th.emph(Style::default().fg(p.ink).bg(p.accent)),
+                ),
+                Span::raw("  "),
+                key("↑/↓"),
+                sep(" move · "),
+                key("Enter"),
+                sep(" run · "),
+                key("i"),
+                sep(" install · "),
+                key("/"),
+                sep(" filter · "),
+                key("c"),
+                sep(" cancel · "),
+                key("t"),
+                sep(" theme · "),
+                Span::styled("?", th.strong(p.accent)),
+                sep(" all keys · "),
+                key("q"),
+                sep(" quit"),
+            ])
+        }
     };
     f.render_widget(Paragraph::new(content), area);
 }
@@ -591,5 +744,67 @@ mod tests {
         a.mode = Mode::HashInput;
         let t = draw(&a, 100, 20);
         assert!(row(&t, 19).contains("hash ▸"));
+    }
+
+    #[test]
+    fn appearance_overlay_renders_every_theme_and_layout() {
+        use crate::app::Appearance;
+        use crate::theme::{Backdrop, Borders, GlyphSet, OverlayPos, ThemeName};
+        let mut a = app();
+        a.appearance = Some(Appearance {
+            cursor: 0,
+            saved: a.settings,
+        });
+        for theme in ThemeName::ALL {
+            for overlay in [OverlayPos::Docked, OverlayPos::Centered] {
+                a.settings.theme = theme;
+                a.settings.overlay = overlay;
+                for (w, h) in [(140, 40), (80, 24), (40, 10), (10, 4)] {
+                    draw(&a, w, h);
+                }
+            }
+        }
+        a.settings.theme = ThemeName::Dark;
+        a.settings.overlay = OverlayPos::Centered;
+        let t = draw(&a, 140, 40);
+        let screen: String = (0..40).map(|y| row(&t, y)).collect::<Vec<_>>().join(
+            "
+",
+        );
+        for k in [
+            "appearance",
+            "preview",
+            "Dark mode",
+            "Borders",
+            "Enter save",
+        ] {
+            assert!(screen.contains(k), "appearance overlay is missing {k:?}");
+        }
+        // ascii everything: no box-drawing or braille left in the dashboard
+        a.appearance = None;
+        a.settings.borders = Borders::Ascii;
+        a.settings.glyphs = GlyphSet::Ascii;
+        a.settings.backdrop = Backdrop::None;
+        let t = draw(&a, 100, 20);
+        let screen: String = (0..20).map(|y| row(&t, y)).collect::<Vec<_>>().join(
+            "
+",
+        );
+        for bad in ["╭", "─", "│", "●", "○", "▸"] {
+            assert!(!screen.contains(bad), "ascii mode still draws {bad:?}");
+        }
+        assert!(screen.contains("+--"), "{screen}");
+    }
+
+    #[test]
+    fn docked_overlay_keeps_the_footer_and_dims_the_rest() {
+        let mut a = app();
+        a.show_help = true;
+        let t = draw(&a, 120, 40);
+        let buf = t.backend().buffer();
+        // the footer row is still the footer
+        assert!(row(&t, 39).contains("quit"), "{}", row(&t, 39));
+        // the header behind the overlay is faded
+        assert!(buf[(1, 0)].modifier.contains(Modifier::DIM));
     }
 }

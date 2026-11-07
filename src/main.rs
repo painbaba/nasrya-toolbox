@@ -19,6 +19,7 @@ mod registry;
 mod runlog;
 mod runner;
 mod scoop;
+mod theme;
 mod ui;
 
 use std::io::Write;
@@ -200,7 +201,9 @@ fn run_tui(explicit: Option<&Path>) -> Result<()> {
     // instead of keystrokes that could trigger key bindings. Best-effort.
     use ratatui::crossterm::{event, execute};
     let _ = execute!(std::io::stdout(), event::EnableBracketedPaste);
-    let result = App::new(catalog, path, ignored).run(&mut terminal);
+    let mut app = App::new(catalog, path, ignored);
+    app.settings = theme::Settings::load();
+    let result = app.run(&mut terminal);
     let _ = execute!(std::io::stdout(), event::DisableBracketedPaste);
     ratatui::restore();
     result

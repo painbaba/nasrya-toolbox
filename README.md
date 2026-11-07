@@ -188,8 +188,38 @@ winsploit --version, -V   show version
 | `f` · `n` · `N` | Find in output · older match · newer match |
 | `c` | Cancel the running process (kills the whole tree) |
 | `h` | Identify a hash (built in, offline) |
+| `t` | Appearance: theme, borders, glyphs, overlays (live preview) |
 | `?` | Show all keys |
 | `q` | Quit |
+
+### Appearance
+
+Press `t` for the appearance panel. Changes preview live across the whole
+dashboard; `Enter` saves them to `%APPDATA%\winsploit\settings.yaml`, `Esc`
+puts the old look back.
+
+| Setting | Options |
+|---|---|
+| Theme | The same set as Claude Code's `/theme`: dark, light, colour-blind-friendly dark / light, ANSI-only dark / light. Plus *Winsploit classic* (the original cyan). `1`–`7` pick one directly. |
+| Borders | rounded `╭─╮` · plain `┌─┐` · double `╔═╗` · thick `┏━┓` · ascii `+-+` |
+| Glyphs | unicode `● ○ ◐ ⠋ ▸` · ascii `* o ~ \| >` (for console fonts without those characters) |
+| Bold text | on · off |
+| Overlays | docked full-width above the footer (Claude Code style) · centered |
+| Backdrop | dim the dashboard behind an overlay · leave it as is |
+
+The terminal picks the typeface itself; these settings choose which characters
+Winsploit draws and how heavy they are. If you see boxes or `?` in the
+Windows console, set borders and glyphs to *ascii*. The file can also be edited
+by hand; missing keys keep their defaults:
+
+```yaml
+theme: dark            # light, dark-daltonized, light-daltonized, dark-ansi, light-ansi, cyan
+borders: rounded       # plain, double, thick, ascii
+glyphs: unicode        # ascii
+bold: true
+overlay: docked        # centered
+backdrop: dim          # none
+```
 
 ### Editing arguments
 
@@ -390,6 +420,13 @@ Pushing a `v*` tag builds and publishes a release zip.
 
 <details open>
 <summary><b>Unreleased (since v0.1.0)</b></summary>
+
+**Appearance (`t`)**
+- Themes matching Claude Code's `/theme` (Claude terracotta accent, colour-blind and ANSI-only
+  variants), with the original cyan kept as *Winsploit classic*.
+- Border style, ASCII glyphs for limited console fonts, bold on/off.
+- Overlays dock above the footer or center, with an optional dimmed backdrop. Saved to
+  `%APPDATA%\winsploit\settings.yaml`.
 
 **Catalog: 6 → 45 tools**
 - Recon and web: gobuster, feroxbuster, httpx, subfinder, amass, katana, rustscan, gau, nikto.

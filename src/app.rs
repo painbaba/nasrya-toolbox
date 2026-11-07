@@ -20,6 +20,7 @@ use crate::registry::{Catalog, Install, Launch, Tool};
 use crate::runlog;
 use crate::runner::{self, AppEvent};
 use crate::scoop;
+use crate::theme::{Field, Settings};
 use crate::ui;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -44,6 +45,14 @@ pub enum Mode {
     Filter,
     /// typing text to find in the output
     Search,
+}
+
+/// State of the `t` appearance overlay.
+pub struct Appearance {
+    /// highlighted row, an index into `theme::Field::ALL`
+    pub cursor: usize,
+    /// what to restore on Esc
+    pub saved: Settings,
 }
 
 #[derive(PartialEq, Eq)]
@@ -82,6 +91,10 @@ pub struct App {
     pub tick: u64,
     /// The '?' key overlay is open.
     pub show_help: bool,
+    /// Appearance in effect (live-previewed while the `t` overlay is open).
+    pub settings: Settings,
+    /// The `t` appearance overlay, when open.
+    pub appearance: Option<Appearance>,
     /// A background detection pass is in flight.
     detecting: bool,
     /// The running process is a scoop install (so re-detect when it exits).
@@ -131,6 +144,8 @@ impl App {
             status_line: "detecting tools…".into(),
             tick: 0,
             show_help: false,
+            settings: Settings::default(),
+            appearance: None,
             detecting: false,
             installing: false,
             screen: Screen::Splash,
@@ -144,7 +159,7 @@ impl App {
         self.detect_all(false);
         while !self.quit {
             terminal.draw(|f| match self.screen {
-                Screen::Splash => banner::render_splash(f, self.tick),
+                Screen::Splash => banner::render_splash(f, self.tick, &self.settings.theme()),
                 Screen::Main => ui::render(f, &self),
             })?;
 
@@ -275,6 +290,10 @@ impl App {
     }
 
     fn on_key(&mut self, key: KeyEvent) {
+        if self.appearance.is_some() {
+            self.on_key_appearance(key.code);
+            return;
+        }
         if self.show_help {
             // any key closes the overlay
             self.show_help = false;
@@ -285,6 +304,47 @@ impl App {
             Mode::Input | Mode::HashInput | Mode::StdinInput | Mode::Filter | Mode::Search => {
                 self.on_key_input(key)
             }
+        }
+    }
+
+    /// Keys while the appearance overlay is open. Changes apply live;
+    /// Enter keeps and saves them, Esc puts the previous look back.
+    fn on_key_appearance(&mut self, code: KeyCode) {
+        let Some(ap) = self.appearance.as_mut() else {
+            return;
+        };
+        let n = Field::ALL.len();
+        let field = Field::ALL[ap.cursor];
+        match code {
+            KeyCode::Up | KeyCode::Char('k') => ap.cursor = (ap.cursor + n - 1) % n,
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => ap.cursor = (ap.cursor + 1) % n,
+            KeyCode::Left | KeyCode::Char('h') => self.settings.step(field, -1),
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' ') => {
+                self.settings.step(field, 1)
+            }
+            // 1-7 pick a theme directly, as in Claude Code's /theme
+            KeyCode::Char(c @ '1'..='9') => {
+                let i = c as usize - '1' as usize;
+                if let Some(t) = crate::theme::ThemeName::ALL.get(i) {
+                    self.settings.theme = *t;
+                    ap.cursor = 0;
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.settings = ap.saved;
+                self.appearance = None;
+            }
+            KeyCode::Enter => {
+                self.appearance = None;
+                match self.settings.save() {
+                    Ok(path) => self.status_line = format!("appearance saved · {}", path.display()),
+                    Err(e) => {
+                        self.status_line = "appearance applied (not saved)".into();
+                        self.push(format!("[err] could not save appearance: {e}"));
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -307,6 +367,12 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
             KeyCode::Char('?') => self.show_help = true,
+            KeyCode::Char('t') => {
+                self.appearance = Some(Appearance {
+                    cursor: 0,
+                    saved: self.settings,
+                })
+            }
             KeyCode::Char('f') => {
                 self.editor.set(&self.search.clone());
                 self.mode = Mode::Search;
