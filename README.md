@@ -123,6 +123,7 @@ pass `--catalog .\tools.yaml` to use it on purpose. The active path is shown in 
 | `Enter` | run the selected tool (edit the prefilled args, then Enter). While a tool is running: type a line to send to its input (`Ctrl+D` = end of input) |
 | `i` | install the selected tool (Scoop or pipx) |
 | `r` | re-detect what's installed |
+| `PgUp / PgDn` | scroll the output (`Home` = top, `End` = follow live output) |
 | `c` | cancel the running process |
 | `h` | identify a hash (built in, works offline) |
 | `q` | quit |

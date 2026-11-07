@@ -55,6 +55,10 @@ pub struct App {
     conflicts: Vec<Option<PathBuf>>,
     pub selected: usize,
     pub output: Vec<String>,
+    /// Output rows scrolled up from the bottom (0 = follow new output).
+    pub scroll: usize,
+    /// Set by the renderer: (visible rows, max useful scroll).
+    pub view: std::cell::Cell<(usize, usize)>,
     pub mode: Mode,
     pub editor: LineEditor,
     history: History,
@@ -98,6 +102,8 @@ impl App {
             conflicts: vec![None; n],
             selected: 0,
             output,
+            scroll: 0,
+            view: std::cell::Cell::new((10, 0)),
             mode: Mode::Browsing,
             editor: LineEditor::default(),
             history: History::default(),
@@ -199,7 +205,15 @@ impl App {
     }
 
     fn push(&mut self, line: impl Into<String>) {
-        self.output.push(line.into());
+        let line = line.into();
+        if line.starts_with("$ ") {
+            // a new command: jump back to the live tail
+            self.scroll = 0;
+        } else if self.scroll > 0 {
+            // scrolled up: keep the view still while output keeps coming
+            self.scroll += 1;
+        }
+        self.output.push(line);
         const MAX: usize = 2000;
         if self.output.len() > MAX {
             let excess = self.output.len() - MAX;
@@ -264,6 +278,16 @@ impl App {
                 }
             }
             KeyCode::Char('r') => self.detect_all(true),
+            KeyCode::PageUp => {
+                let (page, max) = self.view.get();
+                self.scroll = (self.scroll + page.saturating_sub(1).max(1)).min(max);
+            }
+            KeyCode::PageDown => {
+                let (page, _) = self.view.get();
+                self.scroll = self.scroll.saturating_sub(page.saturating_sub(1).max(1));
+            }
+            KeyCode::End => self.scroll = 0,
+            KeyCode::Home => self.scroll = self.view.get().1,
             KeyCode::Char('i') => self.install_selected(),
             KeyCode::Char('c') => self.cancel(),
             KeyCode::Char('h') => {

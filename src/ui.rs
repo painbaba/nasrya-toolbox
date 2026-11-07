@@ -3,7 +3,7 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use crate::app::{App, Mode, ToolStatus};
@@ -146,8 +146,13 @@ fn render_output(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(format!("· {} ", tool.description), Style::default().fg(DIM)),
     ]);
 
-    // Tail the scrollback to roughly fit the visible height.
+    // Lines are hard-wrapped here (not by Paragraph) so we know exactly how
+    // many rows the tail takes: with word-wrap, long lines used to push the
+    // newest output below the pane.
     let inner_height = area.height.saturating_sub(2) as usize;
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let (rows, max_scroll) = visible_rows(&app.output, inner_width, inner_height, app.scroll);
+    app.view.set((inner_height, max_scroll));
     let text: Vec<Line> = if app.output.is_empty() {
         vec![
             Line::from(Span::styled(
@@ -160,14 +165,15 @@ fn render_output(f: &mut Frame, app: &App, area: Rect) {
             )),
         ]
     } else {
-        let start = app.output.len().saturating_sub(inner_height.max(1));
-        app.output[start..]
-            .iter()
-            .map(|l| Line::from(style_output_line(l)))
+        rows.into_iter()
+            .map(|(i, chunk)| {
+                let style = line_style(&app.output[i]);
+                Line::from(Span::styled(chunk, style))
+            })
             .collect()
     };
 
-    let bottom = if app.running {
+    let mut bottom = if app.running {
         let frame = SPINNER[(app.tick / 2 % SPINNER.len() as u64) as usize];
         let pid = app
             .running_pid
@@ -183,39 +189,80 @@ fn render_output(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Line::from(Span::styled(" idle ", Style::default().fg(DIM)))
     };
+    if app.scroll > 0 {
+        bottom.push_span(Span::styled(
+            format!(" ↑ {} rows up · End to follow ", app.scroll.min(max_scroll)),
+            Style::default().fg(CYAN),
+        ));
+    }
 
     let border_color = if app.running { YELLOW } else { CYAN_DIM };
 
-    let para = Paragraph::new(text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(border_color))
-                .title(title)
-                .title_bottom(bottom),
-        )
-        .wrap(Wrap { trim: false });
+    let para = Paragraph::new(text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(border_color))
+            .title(title)
+            .title_bottom(bottom),
+    );
     f.render_widget(para, area);
 }
 
-fn style_output_line(l: &str) -> Span<'static> {
+/// Hard-wrap `output` to `width` columns and return the `height` rows that
+/// are visible `scroll` rows above the bottom, as (source line index, text),
+/// plus the largest useful scroll value. Only walks as far back as needed.
+pub fn visible_rows(
+    output: &[String],
+    width: usize,
+    height: usize,
+    scroll: usize,
+) -> (Vec<(usize, String)>, usize) {
+    let width = width.max(1);
+    let need = scroll + height;
+    // rows collected bottom-up; past `need` rows we only count (for max_scroll)
+    let mut rows: Vec<(usize, String)> = Vec::new();
+    let mut total_rows = 0usize;
+    for (i, line) in output.iter().enumerate().rev() {
+        let chars: Vec<char> = line.chars().collect();
+        let n = chars.len().div_ceil(width).max(1);
+        total_rows += n;
+        if rows.len() < need {
+            let chunks: Vec<String> = if chars.is_empty() {
+                vec![String::new()]
+            } else {
+                chars.chunks(width).map(|c| c.iter().collect()).collect()
+            };
+            for chunk in chunks.into_iter().rev() {
+                rows.push((i, chunk));
+            }
+        }
+    }
+    let max_scroll = total_rows.saturating_sub(height);
+    let scroll = scroll.min(max_scroll);
+    let visible: Vec<(usize, String)> = rows
+        .into_iter()
+        .skip(scroll)
+        .take(height)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    (visible, max_scroll)
+}
+
+/// Colour for an output line, by its prefix (applies to all its wrapped rows).
+fn line_style(l: &str) -> Style {
     if l.starts_with("[err]") {
-        Span::styled(l.to_string(), Style::default().fg(RED))
+        Style::default().fg(RED)
     } else if l.starts_with("> ") {
-        Span::styled(l.to_string(), Style::default().fg(CYAN))
+        Style::default().fg(CYAN)
     } else if l.starts_with("$ ") {
-        Span::styled(
-            l.to_string(),
-            Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
-        )
+        Style::default().fg(YELLOW).add_modifier(Modifier::BOLD)
     } else if l.starts_with("──") || l.starts_with("::") {
-        Span::styled(
-            l.to_string(),
-            Style::default().fg(DIM).add_modifier(Modifier::ITALIC),
-        )
+        Style::default().fg(DIM).add_modifier(Modifier::ITALIC)
     } else {
-        Span::styled(l.to_string(), Style::default().fg(FG))
+        Style::default().fg(FG)
     }
 }
 
@@ -343,6 +390,51 @@ mod tests {
         let footer = row(&t, 11);
         assert!(footer.contains("END"), "{footer}");
         assert!(t.get_cursor_position().unwrap().x < 60);
+    }
+
+    fn lines(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn tail_accounts_for_wrapped_rows() {
+        // the last line is 2.5x the width: the newest rows must be visible
+        let out = lines(&["one", "two", &"x".repeat(25)]);
+        let (rows, max) = visible_rows(&out, 10, 3, 0);
+        let text: Vec<&str> = rows.iter().map(|(_, s)| s.as_str()).collect();
+        assert_eq!(text, ["xxxxxxxxxx", "xxxxxxxxxx", "xxxxx"]);
+        assert_eq!(max, 2); // 5 rows total, 3 visible
+    }
+
+    #[test]
+    fn scrolling_up_and_clamping() {
+        let out = lines(&["a", "b", "c", "d", "e"]);
+        let at = |s| {
+            visible_rows(&out, 10, 2, s)
+                .0
+                .into_iter()
+                .map(|(_, t)| t)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(at(0), ["d", "e"]);
+        assert_eq!(at(1), ["c", "d"]);
+        assert_eq!(at(3), ["a", "b"]);
+        assert_eq!(at(99), ["a", "b"]); // clamped to the top
+        assert_eq!(visible_rows(&out, 10, 2, 0).1, 3);
+    }
+
+    #[test]
+    fn empty_lines_and_indices() {
+        let out = lines(&["", "abcdef"]);
+        let (rows, _) = visible_rows(&out, 4, 5, 0);
+        assert_eq!(
+            rows,
+            [
+                (0, "".to_string()),
+                (1, "abcd".to_string()),
+                (1, "ef".to_string())
+            ]
+        );
     }
 
     #[test]
