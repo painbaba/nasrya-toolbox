@@ -216,3 +216,13 @@ tools:
     run_cmd: dirsearch
     args_hint: "-u https://example.com"
     note: needs Python 3.11+
+
+  - name: wfuzz
+    category: web
+    description: Web content / parameter fuzzer
+    exe: wfuzz
+    install: pipx
+    pipx: wfuzz
+    run_cmd: wfuzz
+    args_hint: "-c -z file,wordlist.txt --hc 404 https://example.com/FUZZ"
+    note: wfuzz depends on pycurl and was last released in 2020; if the install fails on a new Python, ffuf or feroxbuster cover the same ground
