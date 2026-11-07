@@ -273,3 +273,12 @@ tools:
     pipx: volatility3
     run_cmd: vol
     args_hint: "-f memory.dmp windows.info"
+
+  - name: ropper
+    category: pwn
+    description: Find ROP gadgets in binaries
+    exe: ropper
+    install: pipx
+    pipx: ropper
+    run_cmd: ropper
+    args_hint: "--file binary.exe --search \"pop rdi\""
