@@ -15,7 +15,7 @@
 the pentest tools that actually work natively on Windows — no WSL, no VM.
 
 [![CI](https://github.com/tahabenissa/nasrya-toolbox/actions/workflows/ci.yml/badge.svg)](https://github.com/tahabenissa/nasrya-toolbox/actions/workflows/ci.yml)
-![status](https://img.shields.io/badge/status-early%20skeleton-orange)
+![status](https://img.shields.io/badge/status-alpha-orange)
 ![platform](https://img.shields.io/badge/platform-Windows-0078D6)
 ![built with](https://img.shields.io/badge/built%20with-Rust%20%2B%20ratatui-000000)
 ![license](https://img.shields.io/badge/license-MIT-green)
@@ -246,10 +246,13 @@ Config-driven tool registry → detector/installer → process runner (streams l
 
 - [ ] Per-engagement workspaces (scope list, authorization record, audit log) for real pentest workflows
 - [ ] Scope enforcement before every launch (block/override-with-reason)
-- [ ] Richer tool catalog across all categories (recon / web / passwords / forensics)
-- [ ] Output search + scrollback, per-run log files and artifacts
+- [x] Richer tool catalog across all categories: 45 entries (recon / web / passwords / crypto / forensics / stego / reversing / pwn / osint / wordlists)
+- [x] Scrollback (PgUp/PgDn) and per-run log files
+- [ ] Output search, artifacts
 - [ ] One-shot report generation (Markdown/HTML)
-- [ ] Scoop bucket auto-add for security tools
+- [x] Scoop bucket auto-add for security tools
+- [x] pipx (Python) installs, GUI / web-app / dataset launch modes, nasrya's own Scoop bucket
+- [x] Built-in hash identifier
 
 ## Credits & prior art
 

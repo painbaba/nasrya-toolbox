@@ -1,4 +1,4 @@
-# nasrya — tool registry (walking-skeleton subset)
+# nasrya — tool registry
 # Add a tool by adding an entry here; no code changes needed.
 #
 # Fields:
@@ -38,8 +38,8 @@
 #
 # NOTE ON WIRELESS: live Wi-Fi capture / monitor-mode / injection do NOT work on
 # Windows with normal adapters. Tools like aircrack-ng are offline-only here.
-# Real wireless attacks need Linux + a supported USB adapter. Kept out of this
-# subset on purpose so the skeleton stays honest about what actually works.
+# Real wireless attacks need Linux + a supported USB adapter. Kept out of the
+# catalog on purpose so it stays honest about what actually works.
 
 buckets:
   security: https://github.com/opsqw/scoop-security   # formerly whoopscs/scoop-security
