@@ -56,7 +56,14 @@ fn generic_inner_char(c: char) -> bool {
 }
 
 /// Every flag in `line`, left to right.
+#[cfg(test)]
 pub fn find(line: &str) -> Vec<Hit> {
+    find_with(line, &[])
+}
+
+/// `find`, also trusting `extra` prefixes (a challenge's own flag format,
+/// e.g. `ACME`) like the known ones.
+pub fn find_with(line: &str, extra: &[String]) -> Vec<Hit> {
     if !line.contains('{') {
         return Vec::new();
     }
@@ -106,7 +113,11 @@ pub fn find(line: &str) -> Vec<Hit> {
         }
         let prefix: String = c[j..i].iter().collect();
         let inner = &c[i + 1..k];
-        let known = KNOWN.contains(&prefix.to_lowercase().as_str());
+        let lower = prefix.to_lowercase();
+        let known = KNOWN.contains(&lower.as_str())
+            || extra
+                .iter()
+                .any(|e| !e.is_empty() && e.to_lowercase() == lower);
         let generic = !known
             && prefix.chars().any(|ch| ch.is_ascii_uppercase())
             && prefix.chars().count() >= 2
@@ -178,6 +189,15 @@ mod tests {
         let s: String = chars[h[0].start..h[0].end].iter().collect();
         assert_eq!(s, "ctf{one}");
         assert_eq!(h[1].text, "DUCTF{two_2}");
+    }
+
+    #[test]
+    fn a_challenge_format_is_trusted() {
+        // too short for a generic guess, fine once it's the event's format
+        assert_eq!(texts("acme{7}"), []);
+        let h = find_with("acme{7}", &["ACME".to_string()]);
+        assert_eq!(h.len(), 1);
+        assert!(h[0].known);
     }
 
     #[test]

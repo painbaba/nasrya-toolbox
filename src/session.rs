@@ -125,8 +125,9 @@ impl Session {
 
     /// Start this run's log file and say where it is. `source` records
     /// where the run was started from (`terminal` or `web`).
-    pub fn open_log(&mut self, name: &str, command: &str, source: &str) {
-        match RunLog::create(&crate::runlog::log_dir(), name, command, source) {
+    /// `dir` is the active challenge's `logs\` folder, or the default one.
+    pub fn open_log(&mut self, dir: &std::path::Path, name: &str, command: &str, source: &str) {
+        match RunLog::create(dir, name, command, source) {
             Ok(log) => {
                 self.push(format!(":: log: {}", log.path().display()));
                 self.log_path = Some(log.path().to_path_buf());

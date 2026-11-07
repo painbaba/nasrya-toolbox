@@ -32,6 +32,7 @@ use crate::session::{RunState, Session, CONSOLE, SLOTS};
 use crate::theme::{Field, Settings};
 use crate::ui;
 use crate::web::{self, WebAction};
+use crate::workspace::{self, Workspace};
 
 /// Something the user asked the session to do. Terminal keys and the web
 /// view both end up here (`App::apply`), so a feature is written once.
@@ -60,6 +61,8 @@ pub enum Action {
     Close(usize),
     Redetect,
     HashId(String),
+    /// Make the challenge with this id (`<event>/<challenge>`) the active one.
+    Challenge(String),
 }
 
 // kind() and BINDINGS exist for the parity test (and as the checklist above)
@@ -75,6 +78,7 @@ impl Action {
             Action::Close(_) => "close",
             Action::Redetect => "redetect",
             Action::HashId(_) => "hashid",
+            Action::Challenge(_) => "challenge",
         }
     }
 
@@ -89,6 +93,7 @@ impl Action {
         ("close", "x"),
         ("redetect", "r"),
         ("hashid", "h"),
+        ("challenge", "C"),
     ];
 }
 
@@ -152,6 +157,18 @@ pub enum Mode {
     SlotPick,
     /// typing the sample (file or folder) to open in Windows Sandbox
     SandboxInput,
+    /// creating or editing a challenge, one field at a time
+    Challenge(ChallengeField),
+}
+
+/// The fields the challenge prompts ask for, in wizard order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChallengeField {
+    Event,
+    Name,
+    Target,
+    Flag,
+    File,
 }
 
 impl Mode {
@@ -317,6 +334,19 @@ pub struct App {
     pub flags: Vec<Flag>,
     /// The `F` flags list, when open: the highlighted row (0 = newest).
     pub flags_view: Option<usize>,
+    /// The active challenge (logs, flags and files go into its folder).
+    pub challenge: Option<Workspace>,
+    /// Challenges found under `ctf_root`, newest first (refreshed when the
+    /// picker opens or one is created).
+    pub challenge_list: Vec<Workspace>,
+    /// The `C` challenge picker, when open: the highlighted row.
+    pub challenge_view: Option<usize>,
+    /// Where challenge folders live (`%USERPROFILE%\ctf`).
+    pub ctf_root: PathBuf,
+    /// The challenge being created by the prompts (`challenge_new`), or the
+    /// field being edited on the active one.
+    challenge_draft: workspace::Info,
+    challenge_new: bool,
     /// Corner notifications, oldest first.
     pub toasts: Vec<Toast>,
     /// Step of the first-run welcome tour, while it's open.
@@ -403,6 +433,12 @@ impl App {
             appearance: None,
             flags: Vec::new(),
             flags_view: None,
+            challenge: None,
+            challenge_list: Vec::new(),
+            challenge_view: None,
+            ctf_root: workspace::root(),
+            challenge_draft: workspace::Info::default(),
+            challenge_new: false,
             toasts: Vec::new(),
             tour: None,
             mono: crate::theme::no_color(),
@@ -561,7 +597,14 @@ impl App {
     /// Look for flags in a line of output from terminal `pos`. A new one is
     /// listed, announced, copied to the clipboard and saved to flags.txt.
     fn catch_flags(&mut self, pos: usize, line: &str) {
-        for hit in crate::flags::find(line) {
+        let extra: Vec<String> = self
+            .challenge
+            .as_ref()
+            .map(|w| w.info.flag_format.clone())
+            .into_iter()
+            .filter(|f| !f.is_empty())
+            .collect();
+        for hit in crate::flags::find_with(line, &extra) {
             if self.flags.iter().any(|f| f.text == hit.text) {
                 continue;
             }
@@ -577,7 +620,7 @@ impl App {
             // tests must not touch the real clipboard or %LOCALAPPDATA%
             let copied = !cfg!(test) && runner::copy_to_clipboard(&flag.text).is_ok();
             if !cfg!(test) {
-                Self::save_flag(&flag, line);
+                Self::save_flag(&self.flags_path(), &flag, line);
             }
             let kind = if hit.known { "flag" } else { "likely flag" };
             self.toast(ToastKind::Ok, format!("{kind} found: {}", flag.text));
@@ -590,18 +633,29 @@ impl App {
         }
     }
 
-    /// Append one line per flag to `%LOCALAPPDATA%\winsploit\flags.txt`.
-    fn save_flag(flag: &Flag, line: &str) {
+    /// Where flags are saved: the challenge's flags.txt, else
+    /// `%LOCALAPPDATA%\winsploit\flags.txt`.
+    fn flags_path(&self) -> PathBuf {
+        match &self.challenge {
+            Some(w) => w.flags_path(),
+            None => crate::runlog::log_dir()
+                .parent()
+                .map(|p| p.join("flags.txt"))
+                .unwrap_or_else(|| PathBuf::from("flags.txt")),
+        }
+    }
+
+    /// Append one line per flag to `path`.
+    fn save_flag(path: &std::path::Path, flag: &Flag, line: &str) {
         use std::io::Write;
-        let Some(dir) = crate::runlog::log_dir().parent().map(|p| p.to_path_buf()) else {
-            return;
-        };
-        let _ = std::fs::create_dir_all(&dir);
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
         let context: String = line.chars().take(300).collect();
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(dir.join("flags.txt"))
+            .open(path)
         {
             let _ = writeln!(
                 f,
@@ -635,6 +689,235 @@ impl App {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('F') => self.flags_view = None,
             _ => {}
         }
+    }
+
+    // ----------------------------------------------------------- challenges
+
+    /// Where run logs go: the active challenge's `logs\`, else the default.
+    fn logs_dir(&self) -> PathBuf {
+        self.challenge
+            .as_ref()
+            .map(Workspace::logs_dir)
+            .unwrap_or_else(crate::runlog::log_dir)
+    }
+
+    /// At start-up: reopen the challenge that was active last time.
+    pub fn restore_challenge(&mut self) {
+        self.challenge_list = workspace::list(&self.ctf_root);
+        if let Some(ws) = workspace::recall(&self.ctf_root) {
+            self.console.push(format!(
+                ":: challenge: {} ({})",
+                ws.title(),
+                ws.dir.display()
+            ));
+            self.challenge = Some(ws);
+        }
+    }
+
+    /// Make `ws` the active challenge (None: no challenge).
+    fn set_challenge(&mut self, ws: Option<Workspace>) {
+        if !cfg!(test) {
+            workspace::remember(ws.as_ref().map(|w| w.id.as_str()));
+        }
+        match &ws {
+            Some(w) => {
+                let target = if w.info.target.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {}", w.info.target)
+                };
+                self.console.push(format!(
+                    ":: challenge: {}{target} · logs, flags and files go to {}",
+                    w.title(),
+                    w.dir.display()
+                ));
+                self.status_line = format!("challenge: {}{target}", w.title());
+                self.toast(ToastKind::Info, format!("challenge: {}", w.title()));
+            }
+            None => {
+                self.console
+                    .push(":: no active challenge: logs and flags go to the default folder");
+                self.status_line = "no active challenge".into();
+            }
+        }
+        self.challenge = ws;
+        self.challenge_list = workspace::list(&self.ctf_root);
+    }
+
+    /// `C`: open the challenge picker on the active challenge.
+    fn open_challenges(&mut self) {
+        self.challenge_list = workspace::list(&self.ctf_root);
+        let cur = self
+            .challenge
+            .as_ref()
+            .and_then(|a| self.challenge_list.iter().position(|w| w.id == a.id))
+            .unwrap_or(0);
+        self.challenge_view = Some(cur);
+    }
+
+    /// Start a challenge prompt for `field`, prefilled with `text`.
+    fn challenge_prompt(&mut self, field: ChallengeField, text: &str) {
+        self.challenge_view = None;
+        self.editor.set(text);
+        self.mode = Mode::Challenge(field);
+    }
+
+    /// Keys while the challenge picker is open.
+    fn on_key_challenges(&mut self, code: KeyCode) {
+        let Some(cur) = self.challenge_view else {
+            return;
+        };
+        let n = self.challenge_list.len();
+        let need_active = |app: &mut App| {
+            if app.challenge.is_none() {
+                app.status_line = "no active challenge: Enter picks one, n creates one".into();
+                false
+            } else {
+                true
+            }
+        };
+        match code {
+            KeyCode::Up | KeyCode::Char('k') => self.challenge_view = Some(cur.saturating_sub(1)),
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.challenge_view = Some((cur + 1).min(n.saturating_sub(1)))
+            }
+            KeyCode::Enter if n > 0 => {
+                let id = self.challenge_list[cur.min(n - 1)].id.clone();
+                self.challenge_view = None;
+                self.apply(Action::Challenge(id), Source::Terminal);
+            }
+            KeyCode::Char('n') => {
+                self.challenge_new = true;
+                self.challenge_draft = workspace::Info {
+                    event: self
+                        .challenge
+                        .as_ref()
+                        .map(|w| w.info.event.clone())
+                        .unwrap_or_default(),
+                    ..Default::default()
+                };
+                let ev = self.challenge_draft.event.clone();
+                self.challenge_prompt(ChallengeField::Event, &ev);
+            }
+            KeyCode::Char('t') if need_active(self) => {
+                self.challenge_new = false;
+                let t = self.challenge.as_ref().map(|w| w.info.target.clone());
+                self.challenge_prompt(ChallengeField::Target, &t.unwrap_or_default());
+            }
+            KeyCode::Char('l') if need_active(self) => {
+                self.challenge_new = false;
+                let f = self.challenge.as_ref().map(|w| w.info.flag_format.clone());
+                self.challenge_prompt(ChallengeField::Flag, &f.unwrap_or_default());
+            }
+            KeyCode::Char('f') if need_active(self) => {
+                self.challenge_new = false;
+                self.challenge_prompt(ChallengeField::File, "");
+            }
+            KeyCode::Char('m') if need_active(self) => {
+                let p = self.challenge.as_ref().map(Workspace::notes_path);
+                self.open_in_explorer(p);
+            }
+            KeyCode::Char('o') if need_active(self) => {
+                let p = self.challenge.as_ref().map(|w| w.dir.clone());
+                self.open_in_explorer(p);
+            }
+            KeyCode::Char('x') => {
+                self.challenge_view = None;
+                self.set_challenge(None);
+            }
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('C') => self.challenge_view = None,
+            _ => {}
+        }
+    }
+
+    /// Open a file (with its default app) or a folder in Explorer.
+    fn open_in_explorer(&mut self, path: Option<PathBuf>) {
+        let Some(p) = path else { return };
+        self.challenge_view = None;
+        if cfg!(test) {
+            return;
+        }
+        let mut cmd = std::process::Command::new("explorer");
+        cmd.arg(&p);
+        self.status_line = match runner::spawn_detached(cmd) {
+            Ok(_) => format!("opened {}", p.display()),
+            Err(e) => format!("couldn't open {}: {e}", p.display()),
+        };
+    }
+
+    /// Enter in a challenge prompt: store the field, then ask for the next
+    /// one (creating), or save it (editing).
+    fn challenge_step(&mut self, field: ChallengeField, text: String) {
+        use ChallengeField::*;
+        let text = text.trim().to_string();
+        if self.challenge_new {
+            match field {
+                Event | Name if workspace::slug(&text).is_empty() => {
+                    self.status_line = "it needs a name with letters or digits".into();
+                    self.challenge_prompt(field, &text);
+                }
+                Event => {
+                    self.challenge_draft.event = text;
+                    self.challenge_prompt(Name, "");
+                }
+                Name => {
+                    self.challenge_draft.name = text;
+                    self.challenge_prompt(Target, "");
+                }
+                Target => {
+                    self.challenge_draft.target = text;
+                    self.challenge_prompt(Flag, "");
+                }
+                Flag => {
+                    let d = self.challenge_draft.clone();
+                    match Workspace::create(&self.ctf_root, &d.event, &d.name, &d.target, &text) {
+                        Ok(ws) => {
+                            self.set_challenge(Some(ws));
+                            self.challenge_new = false;
+                            self.challenge_prompt(File, "");
+                            self.status_line
+                                .push_str(" · add a challenge file now (path), or Enter to skip");
+                        }
+                        Err(e) => {
+                            self.status_line = format!("couldn't create the challenge: {e:#}");
+                        }
+                    }
+                }
+                File => {}
+            }
+            return;
+        }
+        let Some(ws) = self.challenge.as_mut() else {
+            return;
+        };
+        match field {
+            Target => ws.info.target = text,
+            Flag => ws.info.flag_format = workspace::flag_prefix(&text),
+            File if text.is_empty() => return,
+            File => {
+                let src = PathBuf::from(text.trim_matches('"'));
+                match ws.add_file(&src) {
+                    Ok(dest) => {
+                        self.console.push(format!(
+                            ":: copied {} -> {}",
+                            src.display(),
+                            dest.display()
+                        ));
+                        self.status_line = format!(
+                            "added {} to the challenge (original untouched)",
+                            dest.file_name().unwrap_or_default().to_string_lossy()
+                        );
+                    }
+                    Err(e) => self.status_line = format!("not added: {e:#}"),
+                }
+                return;
+            }
+            Event | Name => return,
+        }
+        self.status_line = match ws.save() {
+            Ok(()) => format!("saved: {} · target {}", ws.title(), ws.info.target),
+            Err(e) => format!("couldn't save challenge.yaml: {e}"),
+        };
     }
 
     // ----------------------------------------------------------------- tour
@@ -785,7 +1068,7 @@ impl App {
         let cmd = runner::tool_command(&t.run_cmd, &args);
         match runner::spawn_streaming(cmd, self.tx.clone(), true, s.id) {
             Ok(sp) => {
-                s.open_log(&t.name, &shown, src.label());
+                s.open_log(&self.logs_dir(), &t.name, &shown, src.label());
                 self.status_line = format!(
                     "running {} in terminal {} (pid {})",
                     t.name,
@@ -1052,6 +1335,7 @@ impl App {
             WebAction::Close { term } => Action::Close(term),
             WebAction::Redetect => Action::Redetect,
             WebAction::Hashid { hash } => Action::HashId(hash),
+            WebAction::Challenge { id } => Action::Challenge(id),
         };
         self.apply(action, Source::Web);
     }
@@ -1090,6 +1374,14 @@ impl App {
                 self.history.push("\u{0}hashid", &hash);
                 self.identify_hash(&hash);
             }
+            // only ids of folders found under the root resolve: a browser
+            // can't name an arbitrary path
+            Action::Challenge(id) => match Workspace::open(&self.ctf_root, &id) {
+                Ok(ws) => self.set_challenge(Some(ws)),
+                Err(_) => {
+                    self.toast(ToastKind::Err, format!("no challenge {id:?}"));
+                }
+            },
         }
     }
 
@@ -1106,6 +1398,10 @@ impl App {
         }
         if self.flags_view.is_some() {
             self.on_key_flags(key.code);
+            return;
+        }
+        if self.challenge_view.is_some() {
+            self.on_key_challenges(key.code);
             return;
         }
         if self.provider_pick.is_some() {
@@ -1199,6 +1495,8 @@ impl App {
             "\u{0}stdin".to_string()
         } else if self.mode == Mode::Search {
             "\u{0}search".to_string()
+        } else if matches!(self.mode, Mode::Challenge(_)) {
+            "\u{0}challenge".to_string()
         } else if self.mode == Mode::SandboxInput {
             "\u{0}sandbox".to_string()
         } else {
@@ -1253,6 +1551,7 @@ impl App {
                 self.editor.set(&self.search.clone());
                 self.mode = Mode::Search;
             }
+            KeyCode::Char('C') => self.open_challenges(),
             KeyCode::Char('F') => {
                 self.flags_view = Some(0);
                 if self.flags.is_empty() {
@@ -1378,6 +1677,7 @@ impl App {
                     }
                     Mode::HashInput => self.apply(Action::HashId(text), Source::Terminal),
                     Mode::SandboxInput => self.launch_sandboxed(&text),
+                    Mode::Challenge(field) => self.challenge_step(field, text),
                     Mode::StdinInput => {
                         self.apply(Action::Stdin(self.focus, text), Source::Terminal)
                     }
@@ -2033,6 +2333,19 @@ impl App {
             "detecting": self.detecting,
             "status_line": self.status_line,
             "history": history,
+            "challenge": self.challenge.as_ref().map(|w| serde_json::json!({
+                "id": w.id,
+                "event": w.info.event,
+                "name": w.info.name,
+                "target": w.info.target,
+                "flag_format": w.info.flag_format,
+                "files": w.files(),
+            })),
+            "challenges": self
+                .challenge_list
+                .iter()
+                .map(|w| serde_json::json!({ "id": w.id, "title": w.title() }))
+                .collect::<Vec<_>>(),
             "flags": self
                 .flags
                 .iter()
@@ -2169,8 +2482,9 @@ impl App {
         }
         match runner::spawn_streaming(cmd, self.tx.clone(), false, CONSOLE) {
             Ok(sp) => {
+                let dir = self.logs_dir();
                 self.console
-                    .open_log(&format!("install-{name}"), &line, src.label());
+                    .open_log(&dir, &format!("install-{name}"), &line, src.label());
                 self.console.started(sp.pid, None);
                 self.installing = true;
                 self.status_line = format!("installing {name}…");
@@ -2532,6 +2846,79 @@ mod tests {
         }
     }
 
+    fn type_line(a: &mut App, text: &str) {
+        for c in text.chars() {
+            a.on_key(key(KeyCode::Char(c)));
+        }
+        a.on_key(key(KeyCode::Enter));
+    }
+
+    #[test]
+    fn challenges_are_created_switched_and_used() {
+        let root = std::env::temp_dir()
+            .join("winsploit-app-tests")
+            .join("challenges");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut a = app();
+        a.ctf_root = root.clone();
+        let big_c = KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT);
+        a.on_key(big_c);
+        assert_eq!(a.challenge_view, Some(0));
+        // the wizard: event, name, target, flag format, then a file
+        a.on_key(key(KeyCode::Char('n')));
+        assert_eq!(a.mode, Mode::Challenge(ChallengeField::Event));
+        type_line(&mut a, "pico 2026");
+        type_line(&mut a, "rev 1");
+        type_line(&mut a, "10.0.0.5");
+        type_line(&mut a, "ACME{");
+        let ws = a.challenge.clone().expect("created and active");
+        assert_eq!(ws.id, "pico-2026/rev-1");
+        assert_eq!(ws.info.target, "10.0.0.5");
+        assert_eq!(a.mode, Mode::Challenge(ChallengeField::File));
+        let sample = root.join("chall.bin");
+        std::fs::write(&sample, b"MZ").unwrap();
+        type_line(&mut a, &sample.display().to_string());
+        assert_eq!(ws.files(), ["chall.bin"]);
+        assert_eq!(a.mode, Mode::Browsing);
+        // logs and flags follow it; its flag format is trusted
+        assert_eq!(a.logs_dir(), ws.logs_dir());
+        assert_eq!(a.flags_path(), ws.flags_path());
+        a.on_runner_event(AppEvent::Output {
+            sid: CONSOLE,
+            line: "acme{7}".into(),
+        });
+        assert_eq!(a.flags.len(), 1);
+        assert!(a.flags[0].known);
+        // edit the target from the picker
+        a.on_key(big_c);
+        a.on_key(key(KeyCode::Char('t')));
+        a.on_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        type_line(&mut a, "10.0.0.9");
+        assert_eq!(
+            Workspace::open(&root, &ws.id).unwrap().info.target,
+            "10.0.0.9"
+        );
+        // a second challenge, then switch back from the web: only real ids
+        Workspace::create(&root, "HTB", "Lame", "", "").unwrap();
+        a.on_web_action(WebAction::Challenge {
+            id: "HTB/Lame".into(),
+        });
+        assert_eq!(a.challenge.as_ref().unwrap().id, "HTB/Lame");
+        for bad in ["../x", "C:/Windows/System32", "HTB/../pico-2026"] {
+            a.on_web_action(WebAction::Challenge { id: bad.into() });
+            assert_eq!(a.challenge.as_ref().unwrap().id, "HTB/Lame", "{bad}");
+        }
+        let st = a.web_state_json();
+        assert!(
+            st.contains("pico-2026/rev-1") && st.contains("\"HTB/Lame\""),
+            "{st}"
+        );
+        // x leaves the challenge
+        a.on_key(big_c);
+        a.on_key(key(KeyCode::Char('x')));
+        assert!(a.challenge.is_none());
+    }
+
     #[test]
     fn altgr_characters_are_typed_not_dropped() {
         let mut a = app();
@@ -2838,6 +3225,7 @@ mod tests {
             Action::Close(1),
             Action::Redetect,
             Action::HashId(String::new()),
+            Action::Challenge(String::new()),
         ];
         assert_eq!(every.len(), Action::BINDINGS.len());
         for a in &every {

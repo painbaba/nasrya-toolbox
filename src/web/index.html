@@ -20,6 +20,10 @@
     <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M7 10l3.2 12 3-8 2.8 8 3.2-12"/><circle cx="24" cy="21" r="2.2"/></svg>
     <span class="name">winsploit</span>
   </div>
+  <label class="challenge-pick" title="Active challenge (C in the terminal creates and edits them)">
+    <select id="challenge" data-action="challenge" aria-label="Active challenge"></select>
+    <span class="challenge-target" id="challenge-target"></span>
+  </label>
   <div class="stats" aria-label="Install status">
     <span class="stat" id="stat-running" hidden><i class="dot running"></i><b id="n-running">0</b> running</span>
     <span class="stat"><i class="dot installed"></i><b id="n-installed">0</b> ready</span>

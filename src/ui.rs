@@ -8,7 +8,8 @@ use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap}
 use ratatui::Frame;
 
 use crate::app::{
-    AgentView, App, Appearance, CatTab, Mode, ProviderPick, ToastKind, ToolStatus, TOUR_STEPS,
+    AgentView, App, Appearance, CatTab, ChallengeField, Mode, ProviderPick, ToastKind, ToolStatus,
+    TOUR_STEPS,
 };
 use crate::banner;
 use crate::registry::{self, Launch, Sandbox};
@@ -67,6 +68,8 @@ pub fn render(f: &mut Frame, app: &App) {
         render_agent(f, ag, &th, area);
     } else if let Some(cur) = app.flags_view {
         render_flags(f, app, cur, &th, area);
+    } else if let Some(cur) = app.challenge_view {
+        render_challenges(f, app, cur, &th, area);
     } else if app.show_help {
         render_help(f, &th, area);
     }
@@ -109,6 +112,10 @@ pub const HELP: &[(&str, &str)] = &[
     ("r", "re-detect installed tools (picks up PATH changes)"),
     ("PgUp PgDn", "scroll the terminal · Home top · End follow"),
     ("f  n  N", "find in the output · older / newer match"),
+    (
+        "C",
+        "challenge: new / switch · target, flag format, files, notes (%USERPROFILE%\\ctf)",
+    ),
     (
         "F",
         "flags caught in tool output: list, Enter copies (each is also copied and saved)",
@@ -552,7 +559,11 @@ fn render_header(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         ])
         .split(area);
 
-    f.render_widget(Paragraph::new(banner::wordmark(th)), cols[0]);
+    let ctx = app
+        .challenge
+        .as_ref()
+        .map(|w| (w.title(), w.info.target.clone()));
+    f.render_widget(Paragraph::new(banner::wordmark(th, ctx)), cols[0]);
 
     // Clickable agent icon: a filled chip, a braille spinner while it works.
     const SPIN: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -1045,6 +1056,14 @@ fn render_session(f: &mut Frame, app: &App, th: &Theme, area: Rect, pos: usize, 
     let inner_height = area.height.saturating_sub(2) as usize;
     let inner_width = area.width.saturating_sub(2) as usize;
     let (rows, max_scroll) = visible_rows_at(&s.output, inner_width, inner_height, s.scroll);
+    // the active challenge's own flag format is highlighted too
+    let extra: Vec<String> = app
+        .challenge
+        .as_ref()
+        .map(|w| w.info.flag_format.clone())
+        .into_iter()
+        .filter(|f| !f.is_empty())
+        .collect();
     s.view.set((inner_height, max_scroll, inner_width));
     let text: Vec<Line> = if s.output.is_empty() {
         vec![Line::from(Span::styled(
@@ -1061,7 +1080,7 @@ fn render_session(f: &mut Frame, app: &App, th: &Theme, area: Rect, pos: usize, 
                 let flag = th
                     .strong(p.accent)
                     .add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
-                Line::from(flag_spans(&s.output[i], offset, chunk, style, flag))
+                Line::from(flag_spans(&s.output[i], offset, chunk, style, flag, &extra))
             })
             .collect()
     };
@@ -1127,8 +1146,9 @@ fn flag_spans(
     chunk: String,
     base: Style,
     flag: Style,
+    extra: &[String],
 ) -> Vec<Span<'static>> {
-    let hits = crate::flags::find(source);
+    let hits = crate::flags::find_with(source, extra);
     if hits.is_empty() {
         return vec![Span::styled(chunk, base)];
     }
@@ -1254,9 +1274,28 @@ fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         | Mode::StdinInput
         | Mode::Filter
         | Mode::Search
-        | Mode::SandboxInput => {
+        | Mode::SandboxInput
+        | Mode::Challenge(_) => {
             let net_help;
             let (name, help) = match app.mode {
+                Mode::Challenge(ChallengeField::Event) => {
+                    ("event", "  e.g. picoCTF 2026 · Enter next · Esc cancel")
+                }
+                Mode::Challenge(ChallengeField::Name) => {
+                    ("challenge", "  e.g. rev crackme1 · Enter next · Esc cancel")
+                }
+                Mode::Challenge(ChallengeField::Target) => (
+                    "target",
+                    "  IP, host, URL or nc host port (optional) · Enter · Esc cancel",
+                ),
+                Mode::Challenge(ChallengeField::Flag) => (
+                    "flag format",
+                    "  e.g. ACME{ (optional: known formats already work) · Enter · Esc cancel",
+                ),
+                Mode::Challenge(ChallengeField::File) => (
+                    "add file",
+                    "  a challenge file to copy in (optional) · Enter · Esc done",
+                ),
                 Mode::SandboxInput => {
                     net_help = format!(
                         "  sample file or folder (read-only) · Tab network: {} · Enter start · Esc cancel",
@@ -1421,6 +1460,83 @@ fn render_toasts(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             r,
         );
     }
+}
+
+/// The `C` overlay: every challenge under the root, the active one marked.
+fn render_challenges(f: &mut Frame, app: &App, cur: usize, th: &Theme, area: Rect) {
+    let p = &th.pal;
+    let g = th.glyph;
+    let mut lines: Vec<Line> = Vec::new();
+    match &app.challenge {
+        Some(w) => {
+            let files = w.files();
+            let mut spans = vec![
+                Span::styled(" active  ", th.fg(p.dim)),
+                Span::styled(w.title(), th.strong(p.fg)),
+            ];
+            if !w.info.target.is_empty() {
+                spans.push(Span::styled(format!("  {}", w.info.target), th.fg(p.info)));
+            }
+            spans.push(Span::styled(
+                format!(
+                    "  · {} file{}{}",
+                    files.len(),
+                    if files.len() == 1 { "" } else { "s" },
+                    if w.info.flag_format.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · flag {}{{…}}", w.info.flag_format)
+                    }
+                ),
+                th.fg(p.dim),
+            ));
+            lines.push(Line::from(spans));
+        }
+        None => lines.push(Line::from(Span::styled(
+            " no active challenge: logs and flags go to the default folder",
+            th.fg(p.dim),
+        ))),
+    }
+    lines.push(Line::raw(""));
+    if app.challenge_list.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!(
+                " no challenges yet · n creates one in {}",
+                app.ctf_root.display()
+            ),
+            th.fg(p.dim),
+        )));
+    }
+    let n = app.challenge_list.len();
+    for (row, w) in app.challenge_list.iter().enumerate() {
+        let on = row == cur.min(n.saturating_sub(1));
+        let active = app.challenge.as_ref().is_some_and(|a| a.id == w.id);
+        let mut spans = vec![
+            Span::styled(if on { g.pointer } else { "  " }, th.fg(p.accent)),
+            Span::styled(w.title(), if on { th.selected() } else { th.fg(p.fg) }),
+        ];
+        if !w.info.target.is_empty() {
+            spans.push(Span::styled(format!("  {}", w.info.target), th.fg(p.dim)));
+        }
+        if active {
+            spans.push(Span::styled(
+                format!("  {} active", g.installed),
+                th.fg(p.ok),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+    let w = lines.iter().map(|l| l.width()).max().unwrap_or(40) as u16 + 4;
+    let h = lines.len().min(22) as u16 + 2;
+    let popup = overlay_area(f, th, area, w.max(60), h);
+    f.render_widget(
+        Paragraph::new(lines).block(overlay_block(
+            th,
+            "challenges",
+            "↑↓ · Enter switch · n new · t target · l flag format · f add file · m notes · o folder · x leave · Esc",
+        )),
+        popup,
+    );
 }
 
 /// The `F` overlay: every flag caught this session, newest first.
@@ -1923,6 +2039,35 @@ mod tests {
             "{underlined}"
         );
         assert!(!underlined.contains("tail"));
+    }
+
+    #[test]
+    fn header_and_picker_show_the_challenge() {
+        let root = std::env::temp_dir()
+            .join("winsploit-ui-tests")
+            .join("challenges");
+        let _ = std::fs::remove_dir_all(&root);
+        let ws =
+            crate::workspace::Workspace::create(&root, "picoCTF 2026", "rev 1", "10.0.0.5", "")
+                .unwrap();
+        let mut a = app();
+        a.ctf_root = root.clone();
+        a.challenge = Some(ws);
+        a.challenge_list = crate::workspace::list(&root);
+        let t = draw(&a, 140, 30);
+        assert!(
+            row(&t, 0).contains("picoCTF 2026 / rev 1"),
+            "{}",
+            row(&t, 0)
+        );
+        assert!(row(&t, 0).contains("10.0.0.5"));
+        a.challenge_view = Some(0);
+        let sc = screen(&draw(&a, 140, 30), 30);
+        assert!(sc.contains("challenges") && sc.contains("active"), "{sc}");
+        // nothing yet: say where they'll go
+        a.challenge = None;
+        a.challenge_list.clear();
+        assert!(screen(&draw(&a, 140, 30), 30).contains("no challenges yet"));
     }
 
     #[test]

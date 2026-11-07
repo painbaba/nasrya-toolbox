@@ -209,8 +209,28 @@ fn render_start_menu(f: &mut Frame, th: &Theme, cur: usize, area: Rect) {
 }
 
 /// A compact one-line wordmark for the main dashboard header.
-pub fn wordmark(th: &Theme) -> Line<'static> {
+/// With an active challenge, its title and target replace the tagline.
+pub fn wordmark(th: &Theme, challenge: Option<(String, String)>) -> Line<'static> {
     let p = &th.pal;
+    if let Some((title, target)) = challenge {
+        let mut spans = vec![
+            Span::styled(
+                if th.glyph.icons {
+                    " ◆ winsploit"
+                } else {
+                    " winsploit"
+                },
+                th.strong(p.accent),
+            ),
+            Span::styled("  ", Style::default()),
+            Span::styled(title, th.strong(p.fg)),
+        ];
+        if !target.is_empty() {
+            spans.push(Span::styled("  ·  ", th.fg(p.dim)));
+            spans.push(Span::styled(target, th.fg(p.info)));
+        }
+        return Line::from(spans);
+    }
     Line::from(vec![
         // accent text, no pill: the solid bar is reserved for the selection
         Span::styled(

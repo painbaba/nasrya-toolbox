@@ -175,6 +175,16 @@ kbd {
   border-bottom: 1px solid var(--border);
 }
 .brand { display: flex; align-items: center; gap: 10px; margin-right: 4px; }
+.challenge-pick { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.challenge-pick select {
+  height: 32px; max-width: 240px; padding: 0 8px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--bg); color: inherit; font: inherit; font-size: 13px;
+}
+.challenge-target {
+  color: var(--faint); font-size: 12.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px;
+}
 .logo { width: 28px; height: 28px; stroke: none; }
 .logo rect { fill: var(--accent); }
 .logo path { stroke: var(--accent-ink); stroke-width: 2.6; fill: none; }

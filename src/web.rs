@@ -82,6 +82,10 @@ pub enum WebAction {
     Hashid {
         hash: String,
     },
+    /// Switch to an existing challenge, by id (`<event>/<challenge>`).
+    Challenge {
+        id: String,
+    },
 }
 
 /// State shared between the app loop and the connection threads.

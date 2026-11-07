@@ -206,7 +206,39 @@ function onState(st) {
   renderCard();
   renderTerminals();
   renderFlags();
+  renderChallenge();
 }
+
+// The active challenge, and switching between existing ones. Creating one
+// (which makes folders) stays in the terminal: C.
+function renderChallenge() {
+  const st = S.st || {};
+  const list = st.challenges || [];
+  const active = st.challenge;
+  const sel = $('challenge');
+  const sig = JSON.stringify([list.map((c) => c.id), active && active.id]);
+  if (sel.dataset.sig !== sig) {
+    sel.dataset.sig = sig;
+    sel.replaceChildren();
+    if (!active) {
+      const o = new Option(list.length ? 'No challenge' : 'No challenges (C in the terminal)', '');
+      o.disabled = true;
+      o.selected = true;
+      sel.append(o);
+    }
+    for (const c of list) {
+      const o = new Option(c.title, c.id);
+      o.selected = !!active && active.id === c.id;
+      sel.append(o);
+    }
+    sel.disabled = list.length === 0;
+  }
+  $('challenge-target').textContent = active && active.target ? active.target : '';
+}
+
+$('challenge').addEventListener('change', (e) => {
+  if (e.target.value) act({ type: 'challenge', id: e.target.value });
+});
 
 // Flags caught in tool output (newest first). Copying happens here in the
 // page; nothing is sent back to winsploit.

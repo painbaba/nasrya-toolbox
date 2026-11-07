@@ -27,6 +27,7 @@ mod session;
 mod theme;
 mod ui;
 mod web;
+mod workspace;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -251,6 +252,7 @@ fn run_tui(explicit: Option<&Path>, web: WebOpts) -> Result<()> {
     let _ = execute!(std::io::stdout(), event::EnableMouseCapture);
     let mut app = App::new(catalog, path, ignored);
     app.settings = theme::Settings::load();
+    app.restore_challenge();
     app.set_start(web.start);
     app.web_port = web.port;
     app.web_lan = web.lan;
