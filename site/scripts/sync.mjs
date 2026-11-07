@@ -93,6 +93,7 @@ const catalog = {
     web: tools.filter((t) => t.launch === 'web').length,
     verified: tools.filter((t) => t.verify).length,
     noted: tools.filter((t) => t.note).length,
+    recipeTools: doc.tools.filter((t) => t.recipes?.length).length,
     ownBucket: tools.filter((t) => t.bucket === 'winsploit').length,
   },
   categories,
@@ -136,6 +137,7 @@ console.log('sync: web view demo from src/web');
 
 // the simulated session's catalog, in the shape of App::web_hello (plus the
 // install fields the mock needs), with placeholders expanded like registry.rs
+const rawRecipes = new Map(doc.tools.map((t) => [t.name, t.recipes ?? []]));
 const appDir = (name) => `C:\\Users\\you\\scoop\\apps\\${name}\\current`;
 const expand = (v, t) => (v ?? '').replaceAll('{scoop_app}', appDir(t.package)).replace(/\{app:([^}]+)\}/g, (_, n) => appDir(n));
 const demoTools = fileOrder.map((t) => ({
@@ -152,6 +154,9 @@ const demoTools = fileOrder.map((t) => ({
   bucket: t.bucket,
   exe: expand(t.exe, t).split('\\').pop(),
   url: t.url ? expand(t.url, t) : null,
+  // raw recipes; the mock fills {target} {file} {out} {wordlist} from the
+  // active demo challenge, like App::web_state_json does
+  recipes: (rawRecipes.get(t.name) ?? []).map((r) => ({ name: r.name, args: expand(r.args, t) })),
 }));
 const present = new Set(fileOrder.flatMap((t) => t.categories));
 const tabs = [

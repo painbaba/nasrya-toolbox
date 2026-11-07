@@ -57,6 +57,30 @@
     { id: 'ACME-CTF/web-login', event: 'ACME-CTF', name: 'web-login', target: 'http://10.10.14.7:8080', flag_format: 'ACME', files: [] },
   ];
   S.challenge = CHALLENGES[1];
+
+  // recipes filled from the active challenge, like recipe::fill_partial:
+  // each known value becomes one quoted argument, unknown ones stay as {gaps}
+  const quote = (v) => `"${v.trim().replace(/\\+$/, '').replaceAll('"', '\\"')}"`;
+  function recipesJson() {
+    const c = S.challenge;
+    const dir = c ? `C:\\Users\\you\\ctf\\${c.event}\\${c.name}` : null;
+    const values = {
+      target: c && c.target ? c.target : null,
+      file: c && c.files.length === 1 ? `${dir}\\files\\${c.files[0]}` : null,
+      out: dir ? `${dir}\\out` : null,
+      wordlist: 'C:\\Users\\you\\scoop\\apps\\seclists-lite\\current\\common.txt',
+    };
+    const out = {};
+    for (const t of tools) {
+      if (!t.recipes || !t.recipes.length) continue;
+      out[t.name] = t.recipes.map((r) => ({
+        name: r.name,
+        args: r.args.replace(/\{(target|file|out|wordlist)\}/g, (m, k) => (values[k] ? quote(values[k]) : m)),
+      }));
+    }
+    return out;
+  }
+
   function stateJson() {
     return {
       status,
@@ -70,6 +94,7 @@
       lan: false,
       challenge: S.challenge,
       challenges: CHALLENGES.map((c) => ({ id: c.id, title: `${c.event} / ${c.name}` })),
+      recipes: recipesJson(),
       flags: [],
     };
   }
