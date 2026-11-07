@@ -376,3 +376,14 @@ tools:
     args_hint: ""
     launch: gui
     note: needs a JDK 21+ (e.g. scoop bucket add java; scoop install java/temurin25-jdk)
+
+  - name: zaproxy
+    category: web
+    description: OWASP ZAP - intercepting proxy and web scanner
+    exe: zap
+    scoop: zaproxy
+    bucket: extras
+    run_cmd: zap
+    args_hint: ""
+    launch: gui
+    note: needs a Java 17+ runtime (e.g. scoop bucket add java; scoop install java/temurin17-jre)
