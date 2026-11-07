@@ -36,6 +36,19 @@ pub enum Launch {
     Dataset,
 }
 
+/// Whether a tool can run in Windows Sandbox (see sandbox.rs).
+#[derive(Debug, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Sandbox {
+    /// runs on the host only (the default)
+    #[default]
+    Never,
+    /// `S` runs it isolated when you want to
+    Optional,
+    /// it executes the sample (debuggers): the dashboard suggests `S`
+    Recommended,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Tool {
     pub name: String,
@@ -82,6 +95,13 @@ pub struct Tool {
     /// program with the same name.
     #[serde(default)]
     pub verify: Option<Verify>,
+    /// Can run in Windows Sandbox: never (default) | optional | recommended.
+    #[serde(default)]
+    pub sandbox: Sandbox,
+    /// Scoop packages mapped read-only into the sandbox and put on PATH
+    /// (runtimes, e.g. a JDK for Ghidra).
+    #[serde(default)]
+    pub sandbox_deps: Vec<String>,
 }
 
 /// `exe <args>` must print something containing `contains` (any case, on
@@ -147,6 +167,27 @@ impl Tool {
             },
             _ if self.run_cmd.trim().is_empty() => p.push("`run_cmd:` is required".into()),
             _ => {}
+        }
+        if self.sandbox != Sandbox::Never {
+            // the sandbox maps the tool's portable Scoop folder in
+            if self.install != Install::Scoop || self.scoop.is_none() {
+                p.push("sandbox needs install: scoop with a `scoop:` package".into());
+            }
+            if !matches!(self.launch, Launch::Gui | Launch::Stream) {
+                p.push("sandbox works for launch: gui or stream tools only".into());
+            }
+        } else if !self.sandbox_deps.is_empty() {
+            p.push("`sandbox_deps:` without `sandbox:`".into());
+        }
+        for d in &self.sandbox_deps {
+            let ok = !d.is_empty()
+                && d.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+            if !ok {
+                p.push(format!(
+                    "bad sandbox_deps entry {d:?} (a Scoop package name)"
+                ));
+            }
         }
         let uses_app = [&self.exe, &self.run_cmd]
             .into_iter()
@@ -449,6 +490,38 @@ mod tests {
         .unwrap();
         assert_eq!(c.tools[0].install, Install::Pipx);
         assert_eq!(c.tools[1].launch, Launch::Web);
+    }
+
+    #[test]
+    fn sandbox_fields_parse_and_validate() {
+        let c = parse(
+            "tools:\n\
+             \x20 - {name: g, exe: g, scoop: ghidra, run_cmd: g, launch: gui, sandbox: optional, sandbox_deps: [temurin25-jdk]}\n\
+             \x20 - {name: x, exe: x, scoop: x64dbg, run_cmd: x, launch: gui, sandbox: recommended}\n\
+             \x20 - {name: n, exe: n, scoop: n, run_cmd: n}\n",
+        )
+        .unwrap();
+        assert_eq!(c.tools[0].sandbox, Sandbox::Optional);
+        assert_eq!(c.tools[0].sandbox_deps, ["temurin25-jdk"]);
+        assert_eq!(c.tools[1].sandbox, Sandbox::Recommended);
+        assert_eq!(c.tools[2].sandbox, Sandbox::Never);
+        let e = parse(
+            "tools:\n\
+             \x20 - {name: a, exe: a, install: pipx, pipx: a, run_cmd: a, sandbox: optional}\n\
+             \x20 - {name: b, exe: b, scoop: b, launch: web, url: 'http://x', sandbox: optional}\n\
+             \x20 - {name: c, exe: c, scoop: c, run_cmd: c, sandbox_deps: [jdk]}\n\
+             \x20 - {name: d, exe: d, scoop: d, run_cmd: d, sandbox: optional, sandbox_deps: ['a&b']}\n",
+        )
+        .unwrap_err();
+        let msg = format!("{e:#}");
+        for needle in [
+            "a: sandbox needs install: scoop",
+            "b: sandbox works for launch: gui or stream",
+            "c: `sandbox_deps:` without `sandbox:`",
+            "d: bad sandbox_deps entry",
+        ] {
+            assert!(msg.contains(needle), "{needle} missing from:\n{msg}");
+        }
     }
 
     #[test]

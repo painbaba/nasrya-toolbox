@@ -20,7 +20,7 @@ use crate::editor::{History, LineEditor};
 use crate::envpath;
 use crate::hashid;
 use crate::install;
-use crate::registry::{self, Catalog, Install, Launch, Tool};
+use crate::registry::{self, Catalog, Install, Launch, Sandbox, Tool};
 use crate::runner::{self, AppEvent};
 use crate::scoop;
 use crate::session::{RunState, Session, CONSOLE, SLOTS};
@@ -145,6 +145,8 @@ pub enum Mode {
     Search,
     /// every terminal is busy: pick one (1-4) to replace, or Esc
     SlotPick,
+    /// typing the sample (file or folder) to open in Windows Sandbox
+    SandboxInput,
 }
 
 impl Mode {
@@ -283,6 +285,10 @@ pub struct App {
     pub tour: Option<usize>,
     /// Colours are stripped (NO_COLOR); the renderer leans on modifiers.
     pub mono: bool,
+    /// The sandbox prompt's network switch (off unless turned on per run).
+    pub sandbox_net: bool,
+    /// Last sample given to the sandbox prompt, offered again next time.
+    sandbox_last: String,
     /// A background detection pass is in flight.
     detecting: bool,
     /// The console is running a scoop install (so re-detect when it exits).
@@ -352,6 +358,8 @@ impl App {
             toasts: Vec::new(),
             tour: None,
             mono: crate::theme::no_color(),
+            sandbox_net: false,
+            sandbox_last: String::new(),
             detecting: false,
             installing: false,
             screen: Screen::Splash,
@@ -1043,6 +1051,8 @@ impl App {
             "\u{0}stdin".to_string()
         } else if self.mode == Mode::Search {
             "\u{0}search".to_string()
+        } else if self.mode == Mode::SandboxInput {
+            "\u{0}sandbox".to_string()
         } else {
             self.tools[self.selected].name.clone()
         }
@@ -1083,6 +1093,7 @@ impl App {
             KeyCode::Char('x') => self.close_focused(confirm == Some(Confirm::Close(self.focus))),
             KeyCode::Char('c') => self.apply(Action::Cancel(self.focus), Source::Terminal),
             KeyCode::Char('s') => self.open_stdin(),
+            KeyCode::Char('S') => self.open_sandbox(),
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char('t') => {
                 self.appearance = Some(Appearance {
@@ -1176,6 +1187,9 @@ impl App {
                 self.editor.set("");
                 self.mode = Mode::Browsing;
             }
+            KeyCode::Tab if self.mode == Mode::SandboxInput => {
+                self.sandbox_net = !self.sandbox_net;
+            }
             KeyCode::Up if self.mode == Mode::Filter => self.move_selection(-1),
             KeyCode::Down if self.mode == Mode::Filter => self.move_selection(1),
             KeyCode::Enter => {
@@ -1192,6 +1206,7 @@ impl App {
                         self.find_next(true);
                     }
                     Mode::HashInput => self.apply(Action::HashId(text), Source::Terminal),
+                    Mode::SandboxInput => self.launch_sandboxed(&text),
                     Mode::StdinInput => {
                         self.apply(Action::Stdin(self.focus, text), Source::Terminal)
                     }
@@ -1440,6 +1455,10 @@ impl App {
                             "── launched {name} (pid {pid}); it runs in its own window ──"
                         ));
                         self.status_line = format!("launched {name} in its own window");
+                        if tool.sandbox == Sandbox::Recommended {
+                            self.status_line
+                                .push_str(" · tip: S runs it in Windows Sandbox instead");
+                        }
                     }
                     Err(e) => {
                         self.console
@@ -1449,6 +1468,131 @@ impl App {
                 }
             }
             Launch::Dataset => self.show_dataset(idx),
+        }
+    }
+
+    /// `S`: ask for the sample to open in Windows Sandbox.
+    fn open_sandbox(&mut self) {
+        let tool = &self.tools[self.selected];
+        let name = tool.name.clone();
+        if !self.visible().contains(&self.selected) {
+            self.status_line = "no tool selected here (← → category, / filter)".into();
+            return;
+        }
+        if tool.sandbox == Sandbox::Never {
+            self.status_line = format!("{name} isn't set up to run in the sandbox");
+            return;
+        }
+        match self.status[self.selected] {
+            ToolStatus::Installed => {}
+            ToolStatus::Unknown => {
+                self.status_line = "still detecting tools — try again in a moment".into();
+                return;
+            }
+            _ => {
+                self.status_line = format!("{name} is not installed — press i to install it");
+                return;
+            }
+        }
+        if crate::sandbox::sandbox_exe().is_none() {
+            for line in crate::sandbox::ENABLE_HINT {
+                self.console.push(format!("[err] {line}"));
+            }
+            self.status_line = "Windows Sandbox isn't enabled (see console for how)".into();
+            self.set_focus(0);
+            return;
+        }
+        self.sandbox_net = false;
+        let last = self.sandbox_last.clone();
+        self.editor.set(&last);
+        self.mode = Mode::SandboxInput;
+    }
+
+    /// Start the selected tool in Windows Sandbox on `target` (a file or a
+    /// folder, or nothing), network off unless switched on in the prompt.
+    fn launch_sandboxed(&mut self, target: &str) {
+        use crate::sandbox;
+        let tool = self.tools[self.selected].clone();
+        let name = tool.name.clone();
+        let target = target.trim().trim_matches('"').trim();
+        self.sandbox_last = target.to_string();
+        let result = (|| -> anyhow::Result<(std::path::PathBuf, sandbox::Plan)> {
+            let exe = sandbox::sandbox_exe()
+                .ok_or_else(|| anyhow::anyhow!("Windows Sandbox isn't enabled"))?;
+            let root = scoop::scoop_root().ok_or_else(|| anyhow::anyhow!("no Scoop root"))?;
+            let pkg = tool.scoop.clone().unwrap_or_default();
+            let (app_dir, exe_rel) = sandbox::locate(&tool.run_cmd, &root, &pkg)?;
+            let mut deps = Vec::new();
+            for d in &tool.sandbox_deps {
+                let dir = root.join("apps").join(d).join("current");
+                if !dir.is_dir() {
+                    anyhow::bail!(
+                        "{name} needs {d} inside the sandbox: install it first (scoop install {d})"
+                    );
+                }
+                deps.push((d.clone(), sandbox::real_dir(&dir)?));
+            }
+            let out = crate::runlog::log_dir()
+                .parent()
+                .map(|p| p.join("sandbox"))
+                .unwrap_or_else(std::env::temp_dir)
+                .join(format!("{}-{name}", crate::runlog::stamp_now()));
+            std::fs::create_dir_all(&out)?;
+            let req = sandbox::Request {
+                app_dir,
+                exe_rel,
+                console: tool.launch == Launch::Stream,
+                deps,
+                target: (!target.is_empty()).then(|| std::path::PathBuf::from(target)),
+                out: out.clone(),
+                network: self.sandbox_net,
+            };
+            let plan = sandbox::plan(&req, &sandbox::protected_dirs())?;
+            let wsb = out.join("winsploit.wsb");
+            std::fs::write(&wsb, sandbox::wsb(&plan))?;
+            let mut cmd = std::process::Command::new(exe);
+            cmd.arg(&wsb);
+            runner::spawn_detached(cmd)?;
+            Ok((out, plan))
+        })();
+        match result {
+            Ok((out, plan)) => {
+                let c = &mut self.console;
+                c.push(format!(
+                    "$ sandbox {name} {}",
+                    if target.is_empty() { "" } else { target }
+                ));
+                for m in &plan.mappings {
+                    c.push(format!(
+                        ":: {} {} -> {}",
+                        if m.writable { "rw" } else { "ro" },
+                        m.host.display(),
+                        m.guest
+                    ));
+                }
+                c.push(format!(
+                    ":: network {} · clipboard, GPU, audio, camera, printers off",
+                    if plan.network { "ON" } else { "off" }
+                ));
+                c.push(format!(
+                    "── {name} is starting in Windows Sandbox; save findings to Desktop\\out, \
+                     they land in {} ──",
+                    out.display()
+                ));
+                self.status_line = format!(
+                    "{name} is starting in Windows Sandbox · everything inside is wiped when you close it"
+                );
+                self.toast(
+                    ToastKind::Info,
+                    format!("{name} starting in Windows Sandbox"),
+                );
+            }
+            Err(e) => {
+                self.console
+                    .push(format!("[err] sandbox: {e:#} — nothing was started"));
+                self.status_line = format!("{name}: sandbox not started (see console)");
+                self.set_focus(0);
+            }
         }
     }
 
@@ -1892,6 +2036,39 @@ mod tests {
         };
         s.ended = ended;
         app.slots[slot] = Some(s);
+    }
+
+    #[test]
+    fn sandbox_key_needs_a_sandbox_ready_tool() {
+        let mut a = app();
+        // nmap isn't set up for the sandbox
+        a.selected = a.tools.iter().position(|t| t.name == "nmap").unwrap();
+        a.status[a.selected] = ToolStatus::Installed;
+        a.on_key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT));
+        assert_eq!(a.mode, Mode::Browsing);
+        assert!(a.status_line.contains("isn't set up"), "{}", a.status_line);
+        // x64dbg is, but must be installed first
+        a.cat = 0;
+        a.selected = a.tools.iter().position(|t| t.name == "x64dbg").unwrap();
+        a.status[a.selected] = ToolStatus::Missing;
+        a.on_key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT));
+        assert!(a.status_line.contains("not installed"), "{}", a.status_line);
+        // installed: the prompt opens, or the console explains how to enable it
+        a.status[a.selected] = ToolStatus::Installed;
+        a.on_key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT));
+        if crate::sandbox::sandbox_exe().is_some() {
+            assert_eq!(a.mode, Mode::SandboxInput);
+            assert!(!a.sandbox_net);
+            a.on_key(key(KeyCode::Tab));
+            assert!(a.sandbox_net, "Tab switches the network on");
+        } else {
+            assert_eq!(a.mode, Mode::Browsing);
+            assert!(a
+                .console
+                .output
+                .iter()
+                .any(|l| l.contains("Containers-DisposableClientVM")));
+        }
     }
 
     #[test]

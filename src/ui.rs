@@ -9,7 +9,7 @@ use ratatui::Frame;
 
 use crate::app::{App, Appearance, CatTab, Mode, ToastKind, ToolStatus, TOUR_STEPS};
 use crate::banner;
-use crate::registry::{self, Launch};
+use crate::registry::{self, Launch, Sandbox};
 use crate::session::{RunState, Session, SLOTS};
 use crate::theme::{Backdrop, Field, OverlayPos, Theme, ThemeName};
 
@@ -85,6 +85,10 @@ pub const HELP: &[(&str, &str)] = &[
     ),
     ("g", "grid: all four terminals at once"),
     ("s", "send a line to the shown tool's input · Ctrl+D = EOF"),
+    (
+        "S",
+        "run the tool in Windows Sandbox: sample read-only, network off (Tab)",
+    ),
     ("c", "stop the shown tool (its output stays)"),
     (
         "x",
@@ -735,6 +739,21 @@ fn render_tool_card(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             th.fg(p.warn),
         )],
     };
+    let mut state = state;
+    match t.sandbox {
+        Sandbox::Never => {}
+        Sandbox::Optional => {
+            state.push(Span::styled(" · ", th.fg(p.dim)));
+            state.push(Span::styled("S", th.strong(p.accent)));
+            state.push(Span::styled(" sandbox", th.fg(p.dim)));
+        }
+        // it runs the sample: say so
+        Sandbox::Recommended => {
+            state.push(Span::styled(" · ", th.fg(p.dim)));
+            state.push(Span::styled("S", th.strong(p.accent)));
+            state.push(Span::styled(" sandbox (recommended)", th.fg(p.warn)));
+        }
+    }
     let lines = vec![
         Line::from(cats),
         Line::from(state),
@@ -1002,8 +1021,21 @@ fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             ));
             Line::from(spans)
         }
-        Mode::Input | Mode::HashInput | Mode::StdinInput | Mode::Filter | Mode::Search => {
+        Mode::Input
+        | Mode::HashInput
+        | Mode::StdinInput
+        | Mode::Filter
+        | Mode::Search
+        | Mode::SandboxInput => {
+            let net_help;
             let (name, help) = match app.mode {
+                Mode::SandboxInput => {
+                    net_help = format!(
+                        "  sample file or folder (read-only) · Tab network: {} · Enter start · Esc cancel",
+                        if app.sandbox_net { "ON" } else { "off" }
+                    );
+                    ("sandbox", net_help.as_str())
+                }
                 Mode::HashInput => ("hash", "  Enter identify · Esc cancel"),
                 Mode::StdinInput => ("stdin", "  Enter send · Ctrl+D end input · Esc close"),
                 Mode::Filter => (
@@ -1033,7 +1065,7 @@ fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
                 Span::styled(format!("{visible:<w$}", w = text_w as usize), th.fg(p.fg)),
             ];
             if show_help {
-                spans.push(Span::styled(help, th.fg(p.dim)));
+                spans.push(Span::styled(help.to_string(), th.fg(p.dim)));
             }
             Line::from(spans)
         }

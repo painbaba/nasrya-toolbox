@@ -203,6 +203,7 @@ winsploit --version, -V   show version
 | `f` · `n` · `N` | Find in output · older match · newer match |
 | `c` | Cancel the running process (kills the whole tree) |
 | `h` | Identify a hash (built in, offline) |
+| `S` | Run the selected tool in Windows Sandbox (see below) · `Tab` in the prompt = network on/off |
 | `t` | Appearance: theme, borders, glyphs, overlays (live preview) |
 | `w` · `W` · `o` | Web view: start / stop · serve your LAN · open it in the browser |
 | `?` | Show all keys |
@@ -257,6 +258,34 @@ The args and hash prompts are real line editors:
 
 Backslashes are literal (no need to double them) and `\"` is a literal quote. A quoted path can't
 end in a backslash, so write `"C:\dir"`, not `"C:\dir\"`.
+
+### Sandbox (reversing & pwn)
+
+Debuggers run the binary you're looking at. For a CTF crackme that's usually fine, until it isn't.
+Press **`S`** on a tool marked *sandbox* (x64dbg and dnSpy are *recommended*; Cutter, Ghidra,
+radare2 and Detect It Easy are *optional*), give it the challenge file or folder, and Winsploit
+starts the tool inside **Windows Sandbox**, a throwaway VM that Windows wipes when you close it:
+
+- The tool's own Scoop folder (plus runtimes like the JDK for Ghidra) is mapped in **read-only**;
+  nothing gets installed inside the VM.
+- The sample's folder is mapped **read-only** to `Desktop\samples`. A file you pick is opened in
+  the tool directly.
+- **`Desktop\out`** is the only writable folder. It lands in
+  `%LOCALAPPDATA%\winsploit\sandbox\<time>-<tool>` on the host, next to the generated `.wsb`.
+- **Network is off** unless you switch it on with `Tab` in the prompt. Clipboard, GPU, audio,
+  camera and printers are always off.
+- Your profile, `AppData`, Scoop, `Program Files` and Windows can't be shared as the sample folder.
+
+Windows Sandbox needs Windows 10/11 **Pro, Enterprise or Education** with virtualization on (not
+Home). Enable it once from an admin PowerShell, then reboot:
+
+```powershell
+Enable-WindowsOptionalFeature -Online -FeatureName Containers-DisposableClientVM -All
+```
+
+> [!NOTE]
+> This is a seatbelt for CTF binaries, not a malware lab. VM escapes exist, and anything you copy
+> out of `Desktop\out` is yours to handle. Analyse real malware in a dedicated VM with snapshots.
 
 ### Logs
 
@@ -393,6 +422,8 @@ that:
   (DNS-rebinding guard) and changes must come from the page itself as JSON (CSRF guard). The
   browser sends the same actions as the keys, never a command line, and the sign-in token is
   masked on the page.
+- **Optional isolation for samples.** `S` runs debuggers and other reversing tools in Windows
+  Sandbox with the sample read-only, one writable output folder and no network by default.
 
 ## 🏗️ Architecture
 
@@ -425,6 +456,7 @@ flowchart LR
 | `runlog.rs` | Per-run log files |
 | `app.rs` | State machine; every key and web request becomes an `Action` handled by `App::apply` |
 | `web.rs` · `web/` | Web view: local HTTP server, event stream, sign-in, and the embedded page |
+| `sandbox.rs` | Windows Sandbox runs: locate the tool, safety checks, `.wsb` generation |
 | `ui.rs` · `banner.rs` | Dashboard rendering, ASCII splash and wordmark |
 | `bucket_tests.rs` | Validates every manifest in `bucket/` against the catalog |
 

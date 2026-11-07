@@ -19,6 +19,7 @@ mod install;
 mod registry;
 mod runlog;
 mod runner;
+mod sandbox;
 mod scoop;
 mod session;
 mod theme;

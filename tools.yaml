@@ -28,6 +28,12 @@
 #   verify      (optional) { args: "-version", contains: "text" }: run exe with args at
 #               detection time (3 s timeout); if the output lacks the text, the exe on
 #               PATH is a different program with the same name -> shown as a conflict
+#   sandbox     (optional) never (default) | optional | recommended: `S` runs the tool in
+#               Windows Sandbox (throwaway VM; sample read-only, network off by default).
+#               Scoop gui/stream tools only. Use recommended for tools that execute the
+#               sample (debuggers).
+#   sandbox_deps (optional) Scoop packages mapped read-only into the sandbox and put on
+#               PATH, e.g. [temurin25-jdk] for Java tools
 #
 # {scoop_app} in exe / run_cmd / url expands to the tool's Scoop app directory
 # (<scoop root>\apps\<scoop>\current). Use it for files Scoop doesn't put on
@@ -195,6 +201,7 @@ tools:
     scoop: radare2
     run_cmd: radare2
     args_hint: "-v"
+    sandbox: optional
 
   - name: upx
     categories: [reversing]
@@ -352,6 +359,7 @@ tools:
     run_cmd: diec
     args_hint: "binary.exe"
     note: this runs the console version (diec); the GUI is 'die', also on PATH
+    sandbox: optional
 
   - name: cutter
     categories: [reversing]
@@ -362,6 +370,7 @@ tools:
     run_cmd: cutter
     args_hint: ""
     launch: gui
+    sandbox: optional
 
   - name: x64dbg
     categories: [reversing, pwn]
@@ -373,6 +382,7 @@ tools:
     args_hint: ""
     launch: gui
     note: for 32-bit targets run x32dbg (also installed), or x96dbg to pick automatically
+    sandbox: recommended
 
   - name: dnspy
     categories: [reversing]
@@ -383,6 +393,7 @@ tools:
     run_cmd: '{scoop_app}\dnSpy.exe'
     args_hint: ""
     launch: gui
+    sandbox: recommended
 
   - name: ghidra
     categories: [reversing, pwn]
@@ -394,6 +405,8 @@ tools:
     args_hint: ""
     launch: gui
     note: needs a JDK 21+ (e.g. scoop bucket add java; scoop install java/temurin25-jdk)
+    sandbox: optional
+    sandbox_deps: [temurin25-jdk]
 
   - name: zaproxy
     categories: [web, exploit]

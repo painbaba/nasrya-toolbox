@@ -74,6 +74,14 @@ manifest in `bucket/`, and `bucket_tests.rs` validates those manifests against t
 - The web view (web.rs) is off by default, binds 127.0.0.1 unless `--lan`, needs the per-session
   token/cookie, checks Host (IP literals only) and Origin + JSON on POSTs, and only accepts
   `WebAction`s. Never add an endpoint that runs a command line or serves arbitrary files.
+- Windows Sandbox runs (`S`, sandbox.rs) map the tool and sample **read-only**, with one
+  writable output folder; network, clipboard, vGPU, audio, camera and printers are off
+  (network can be turned on per run). `check_sample_dir` refuses the profile itself, AppData,
+  Scoop, Program Files and Windows. Anything that ends up on the logon `cmd.exe` line must pass
+  `cmd_safe`. Windows Sandbox can't run in CI, so this is covered by unit tests on the plan
+  and `.wsb` output; test a real launch by hand on Windows Pro.
+  Sandbox runs are terminal-only on purpose (not an `app::Action`): the web view must never
+  choose host folders to map into a VM.
 
 **Terminal and web share one code path.** Keys and web requests both become an `app::Action`
 and go through `App::apply`; `sync_web` mirrors sessions, toasts and state to the browser once

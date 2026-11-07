@@ -109,6 +109,11 @@ fn civil(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
     )
 }
 
+/// Now, as a sortable, filename-safe stamp (`20261107-031502Z`).
+pub fn stamp_now() -> String {
+    stamp_compact(unix_now())
+}
+
 /// `20261107-031502Z`, sortable and filename-safe.
 fn stamp_compact(secs: u64) -> String {
     let (y, mo, d, h, mi, s) = civil(secs);
