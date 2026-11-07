@@ -41,3 +41,15 @@ jobs:
         run: |
           ./target/release/winsploit.exe --version
           ./target/release/winsploit.exe list
+
+      # Advisory: catches .iss errors before a release tag does. Inno Setup 6 is
+      # preinstalled on windows-latest.
+      - name: Build installer (advisory)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          ./target/release/winsploit.exe --catalog tools.yaml packs --iss | Set-Content -Encoding ascii installer/packs.iss
+          $iscc = (Get-Command ISCC -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc "/DAppVersion=0.0.0-ci" installer/winsploit.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }

@@ -332,6 +332,10 @@ pub struct App {
     history: History,
     /// A key that needs a second press (x on a running tool, q with tools running).
     pub confirm: Option<Confirm>,
+    /// Packs chosen in setup.exe, waiting for a yes or no.
+    pub first_run: Option<crate::firstrun::Pending>,
+    /// Tools queued by a confirmed first run, installed one after another.
+    install_queue: std::collections::VecDeque<usize>,
     /// Run waiting for the user to pick a slot: (tool index, args).
     pending: Option<(usize, Vec<String>)>,
     /// Re-detect was asked for during a pass: run another one after it.
@@ -440,7 +444,7 @@ pub struct App {
 
 impl App {
     pub fn new(catalog: Catalog, catalog_path: PathBuf, ignored: Option<PathBuf>) -> Self {
-        let Catalog { tools, buckets } = catalog;
+        let Catalog { tools, buckets, .. } = catalog;
         let (tx, rx) = mpsc::channel();
         let n = tools.len();
         let mut console = Session::new(CONSOLE, "console", "installs · hash ids · messages");
@@ -475,6 +479,8 @@ impl App {
             editor: LineEditor::default(),
             history: History::default(),
             confirm: None,
+            first_run: None,
+            install_queue: Default::default(),
             pending: None,
             redetect_queued: false,
             start_menu: Some(0),
@@ -1565,6 +1571,7 @@ impl App {
                         self.toast(ToastKind::Err, "✗ install failed (see console)");
                     }
                     self.detect_all(true);
+                    self.next_queued_install();
                 }
             }
             AppEvent::Detected(found) => self.on_detected(found),
@@ -1921,6 +1928,10 @@ impl App {
     fn on_key(&mut self, key: KeyEvent) {
         if self.tour.is_some() {
             self.on_key_tour(key.code);
+            return;
+        }
+        if self.first_run.is_some() {
+            self.on_key_first_run(key.code);
             return;
         }
         if self.join_prompt.is_some() {
@@ -3087,6 +3098,52 @@ impl App {
                 .unwrap_or(false)
     }
 
+    /// Confirmation for the packs setup.exe left behind: y/Enter queues the
+    /// installs in the console, n/Esc drops them. The file is gone either way.
+    fn on_key_first_run(&mut self, code: KeyCode) {
+        let yes = match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => true,
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => false,
+            _ => return,
+        };
+        let Some(pending) = self.first_run.take() else {
+            return;
+        };
+        let names = pending.finish();
+        if !yes {
+            self.console
+                .push(":: skipped the installer's tool packs (i installs a tool any time)");
+            return;
+        }
+        self.set_focus(0);
+        self.console.push(format!(
+            ":: installing {} tools chosen in setup",
+            names.len()
+        ));
+        self.install_queue = self
+            .tools
+            .iter()
+            .enumerate()
+            .filter(|(i, t)| {
+                names.contains(&t.name) && self.status.get(*i) != Some(&ToolStatus::Installed)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        self.next_queued_install();
+    }
+
+    /// Start the next queued install once the console is free.
+    fn next_queued_install(&mut self) {
+        while !self.installing && !self.console.running() {
+            let Some(i) = self.install_queue.pop_front() else {
+                break;
+            };
+            if self.status[i] != ToolStatus::Installed {
+                self.install(i, Source::Terminal);
+            }
+        }
+    }
+
     /// Installs run in the console, one at a time, so they never take a
     /// tool terminal.
     fn install(&mut self, idx: usize, src: Source) {
@@ -4233,5 +4290,30 @@ mod tests {
         assert_eq!(h["tabs"][0]["label"], "All");
         assert_eq!(h["tabs"][1]["key"], "installed");
         assert_eq!(h["tools"].as_array().unwrap().len(), a.tools.len());
+    }
+
+    #[test]
+    fn first_run_asks_and_a_no_installs_nothing_but_deletes_the_file() {
+        let cat = crate::registry::parse(include_str!("../tools.yaml")).unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("winsploit-test-{}-firstrun", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("first-run.yaml");
+        std::fs::write(
+            &f,
+            "packs: [ctf]
+",
+        )
+        .unwrap();
+        let mut a = app();
+        a.first_run = crate::firstrun::Pending::load_from(&f, &cat);
+        assert!(a.first_run.is_some() && f.exists());
+        // unrelated keys neither answer nor leak through to the dashboard
+        a.on_key(key(KeyCode::Char('i')));
+        assert!(a.first_run.is_some() && !a.installing && f.exists());
+        a.on_key(key(KeyCode::Char('n')));
+        assert!(a.first_run.is_none() && !f.exists());
+        assert!(a.install_queue.is_empty() && !a.installing);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

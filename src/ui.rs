@@ -84,6 +84,9 @@ pub fn render(f: &mut Frame, app: &App) {
     if let Some(p) = &app.join_prompt {
         render_join_prompt(f, p, &th, area);
     }
+    if let Some(p) = &app.first_run {
+        render_first_run(f, &th, area, &p.names);
+    }
     if let Some(step) = app.tour {
         render_tour(f, &th, area, step);
     }
@@ -2034,6 +2037,49 @@ pub const TOUR: [&str; TOUR_STEPS] = [
     "⏎ runs a tool in its own terminal · i installs it",
     "/ filters · ? shows every key · t changes the look",
 ];
+
+/// Setup's tool packs: every tool that would be installed, then y / n.
+fn render_first_run(f: &mut Frame, th: &Theme, area: Rect, names: &[String]) {
+    let p = &th.pal;
+    let w = area.width.saturating_sub(6).clamp(30, 76);
+    let inner = w.saturating_sub(4) as usize;
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("Install these {} tools?", names.len()),
+            th.strong(p.fg),
+        )),
+        Line::raw(""),
+    ];
+    let mut row = String::new();
+    for n in names {
+        if !row.is_empty() && row.chars().count() + n.chars().count() + 2 > inner {
+            lines.push(Line::from(Span::styled(
+                std::mem::take(&mut row),
+                th.fg(p.fg),
+            )));
+        }
+        if !row.is_empty() {
+            row.push_str(", ");
+        }
+        row.push_str(n);
+    }
+    lines.push(Line::from(Span::styled(row, th.fg(p.fg))));
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "You picked these packs in setup. They install one by one in the console.",
+        th.fg(p.dim),
+    )));
+    let h = lines.len() as u16 + 2;
+    dim_backdrop(f, th, area);
+    let card = centered(area, w, h.min(area.height));
+    f.render_widget(Clear, card);
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(ratatui::widgets::Wrap { trim: true })
+            .block(overlay_block(th, "tool packs", "y install · n skip")),
+        card,
+    );
+}
 
 /// The first-run welcome card, always centered, on top of everything.
 fn render_tour(f: &mut Frame, th: &Theme, area: Rect, step: usize) {

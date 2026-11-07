@@ -20,3 +20,7 @@ Thumbs.db
 /site/.data/
 /site/app/data/catalog.json
 /site/public/demo/
+
+# installer build output
+/installer/packs.iss
+/dist/

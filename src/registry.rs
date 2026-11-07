@@ -421,6 +421,10 @@ pub struct Catalog {
     /// name (extras, versions, ...) don't need an entry.
     #[serde(default)]
     pub buckets: BTreeMap<String, String>,
+    /// Curated tool sets that aren't a category (the installer's "CTF
+    /// starter"): pack id -> tool names.
+    #[serde(default)]
+    pub packs: BTreeMap<String, Vec<String>>,
 }
 
 /// Where to look for `tools.yaml`, in priority order.
@@ -520,6 +524,27 @@ pub fn parse(text: &str) -> Result<Catalog> {
         .collect();
     if !errors.is_empty() {
         anyhow::bail!("invalid tool entries:\n{}", errors.join("\n"));
+    }
+    let pack_errors: Vec<String> = cat
+        .packs
+        .iter()
+        .flat_map(|(id, names)| {
+            let tools = &cat.tools;
+            names
+                .iter()
+                .filter(move |n| !tools.iter().any(|t| &t.name == *n))
+                .map(move |n| format!("  pack {id}: no tool named {n}"))
+        })
+        .collect();
+    if !pack_errors.is_empty() {
+        anyhow::bail!(
+            "invalid packs:
+{}",
+            pack_errors.join(
+                "
+"
+            )
+        );
     }
     for t in &mut cat.tools {
         t.normalize_categories();

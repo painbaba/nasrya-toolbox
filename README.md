@@ -65,6 +65,17 @@ really works on Windows and what needs Linux.
 
 ## Quick start
 
+**Easiest (no admin):** download `winsploit-<version>-setup.exe` from the
+[Releases](https://github.com/tahabenissa/nasrya-toolbox/releases) page. It installs to
+`%LOCALAPPDATA%\Programs\Winsploit`, adds Winsploit to your PATH, can set up Scoop, git, buckets and
+pipx, and lets you tick tool packs. The first time you start Winsploit it lists every tool in those
+packs and asks before installing anything. Open a **new** terminal and type `winsploit`.
+Silent: `winsploit-<version>-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /PACKS=recon,web`.
+The installer is unsigned (SmartScreen: "More info", then "Run anyway"); check it against `SHA256SUMS`.
+To set up the same things from a terminal: `winsploit setup --buckets --pipx`.
+
+**Or build from source:**
+
 **You need:** Windows 10/11, [Scoop](https://scoop.sh) (Winsploit installs tools through it), and
 [Rust 1.87+](https://rustup.rs) to build from source.
 

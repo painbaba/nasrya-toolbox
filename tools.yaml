@@ -66,6 +66,11 @@ buckets:
   # winsploit's own manifests (bucket/ in this repo) for tools no other bucket packages
   winsploit: https://github.com/tahabenissa/nasrya-toolbox
 
+# packs: curated tool sets that aren't a category. The installer offers them
+# next to the category packs (`ctf` is the "CTF starter"). Names must exist below.
+packs:
+  ctf: [nmap, ffuf, gobuster, sqlmap, hashcat, john, hashid, openssl, exiftool, strings, steghide, cyberchef, radare2, ghidra, pwntools, rsactftool]
+
 tools:
   - name: nmap
     categories: [network, recon]

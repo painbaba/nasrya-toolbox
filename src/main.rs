@@ -16,6 +16,7 @@ mod detect;
 mod editor;
 mod envpath;
 mod firewall;
+mod firstrun;
 mod flags;
 mod hashid;
 mod install;
@@ -26,6 +27,7 @@ mod runner;
 mod sandbox;
 mod scoop;
 mod session;
+mod setup;
 mod theme;
 mod tls;
 mod ui;
@@ -100,6 +102,33 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some("list") => list(catalog.as_deref()),
+        Some("setup") => {
+            let flags = &args[1..];
+            if let Some(bad) = flags.iter().find(|a| *a != "--buckets" && *a != "--pipx") {
+                eprintln!("winsploit: setup: unknown option '{bad}'");
+                std::process::exit(2);
+            }
+            let Loaded { catalog, .. } = load_catalog(catalog.as_deref())?;
+            let buckets = flags.iter().any(|a| a == "--buckets");
+            let pipx = flags.iter().any(|a| a == "--pipx");
+            if let Err(e) = setup::run(&catalog, buckets, pipx) {
+                eprintln!("winsploit: setup: {e:#}");
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+        // Hidden: the installer's build step turns this into packs.iss.
+        Some("packs") => {
+            let Loaded { catalog, .. } = load_catalog(catalog.as_deref())?;
+            if args.get(1).map(String::as_str) == Some("--iss") {
+                print!("{}", firstrun::iss_include(&catalog));
+            } else {
+                for p in firstrun::pack_list(&catalog) {
+                    println!("{:<10} {:<14} {}", p.id, p.label, p.count);
+                }
+            }
+            Ok(())
+        }
         Some("hashid") => {
             if args.len() < 2 {
                 eprintln!("usage: winsploit hashid <hash> [<hash> ...]");
@@ -253,9 +282,12 @@ fn run_tui(explicit: Option<&Path>, web: WebOpts) -> Result<()> {
     // trade-off is that the terminal's own click-drag text selection is
     // suppressed while the dashboard is up (the run log keeps the output).
     let _ = execute!(std::io::stdout(), event::EnableMouseCapture);
+    // choices left by setup.exe: the dashboard asks before installing anything
+    let first_run = firstrun::Pending::load(&catalog);
     let mut app = App::new(catalog, path, ignored);
     app.settings = theme::Settings::load();
     app.restore_challenge();
+    app.first_run = first_run;
     app.set_start(web.start);
     app.web_port = web.port;
     app.web_lan = web.lan;

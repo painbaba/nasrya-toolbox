@@ -1,0 +1,7 @@
+AUTHORIZED USE ONLY
+
+Winsploit is for authorized penetration testing, security research, CTFs and learning. Only point it at systems you own or have explicit written permission to test. Unauthorized scanning or attacking is illegal in most jurisdictions, and staying inside your rules of engagement is your responsibility.
+
+By continuing you confirm that you will use Winsploit and the tools it installs only in this way.
+
+Winsploit is released under the MIT license (the LICENSE file is installed next to winsploit.exe). The security tools it installs through Scoop and pipx have their own licenses.

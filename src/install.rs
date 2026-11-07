@@ -36,6 +36,53 @@ fn safe_pipx_spec(s: &str) -> bool {
         })
 }
 
+/// Steps that make `pipx` available and put its bin dir on the user PATH.
+/// Shared by tool installs and `winsploit setup --pipx`.
+pub fn pipx_bootstrap(pre: Prereqs, who: &str) -> Result<Vec<String>, String> {
+    let mut steps = Vec::new();
+    if !pre.pipx {
+        if !pre.scoop {
+            return Err(format!(
+                "{who} needs pipx, which isn't installed. Either install Scoop (winsploit \
+                 then sets up Python + pipx for you) or run: python -m pip install \
+                 --user pipx && python -m pipx ensurepath"
+            ));
+        }
+        if !pre.python {
+            steps.push("scoop install python".to_string());
+        }
+        steps.push("scoop install pipx".to_string());
+    }
+    // Puts pipx's bin dir (~\.local\bin) on the user PATH; idempotent.
+    // winsploit re-reads PATH after the install, so the tool shows up
+    // without a restart.
+    steps.push("pipx ensurepath".to_string());
+    Ok(steps)
+}
+
+/// `scoop bucket add` steps for every bucket the catalog's tools need and
+/// that isn't added yet (`added` says which are). Sorted, de-duplicated.
+pub fn bucket_steps(
+    tools: &[Tool],
+    urls: &BTreeMap<String, String>,
+    added: impl Fn(&str) -> bool,
+) -> Result<Vec<String>, String> {
+    let mut names: Vec<&str> = tools
+        .iter()
+        .filter(|t| t.install == Install::Scoop)
+        .filter_map(|t| t.bucket.as_deref())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    let mut steps = Vec::new();
+    for b in names {
+        if let Some(s) = scoop::plan_bucket_add(b, added(b), urls)? {
+            steps.push(s);
+        }
+    }
+    Ok(steps)
+}
+
 pub fn plan(
     tool: &Tool,
     pre: Prereqs,
@@ -54,25 +101,7 @@ pub fn plan(
             if !safe_pipx_spec(spec) {
                 return Err(format!("refusing unsafe pipx spec {spec:?}"));
             }
-            let mut steps = Vec::new();
-            if !pre.pipx {
-                if !pre.scoop {
-                    return Err(format!(
-                        "{} needs pipx, which isn't installed. Either install Scoop (winsploit \
-                         then sets up Python + pipx for you) or run: python -m pip install \
-                         --user pipx && python -m pipx ensurepath",
-                        tool.name
-                    ));
-                }
-                if !pre.python {
-                    steps.push("scoop install python".to_string());
-                }
-                steps.push("scoop install pipx".to_string());
-            }
-            // Puts pipx's bin dir (~\.local\bin) on the user PATH; idempotent.
-            // winsploit re-reads PATH after the install, so the tool shows up
-            // without a restart.
-            steps.push("pipx ensurepath".to_string());
+            let mut steps = pipx_bootstrap(pre, &tool.name)?;
             steps.push(format!("pipx install {spec}"));
             Ok(steps)
         }
@@ -163,6 +192,51 @@ mod tests {
         };
         let e = plan(&t, pre, &BTreeMap::new()).unwrap_err();
         assert!(e.contains("install Scoop") && e.contains("pip install --user pipx"));
+    }
+
+    #[test]
+    fn bucket_steps_cover_needed_buckets_once() {
+        let cat = crate::registry::parse(
+            "buckets: {security: 'https://example.com/s'}\ntools:\n\
+             \x20 - {name: a, exe: a, scoop: a, bucket: security, run_cmd: a}\n\
+             \x20 - {name: b, exe: b, scoop: b, bucket: security, run_cmd: b}\n\
+             \x20 - {name: c, exe: c, scoop: c, bucket: extras, run_cmd: c}\n\
+             \x20 - {name: d, exe: d, scoop: d, run_cmd: d}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            bucket_steps(&cat.tools, &cat.buckets, |_| false).unwrap(),
+            [
+                "scoop bucket add extras",
+                "scoop bucket add security https://example.com/s"
+            ]
+        );
+        assert!(bucket_steps(&cat.tools, &cat.buckets, |_| true)
+            .unwrap()
+            .is_empty());
+        let unknown = crate::registry::parse(
+            "tools:\n  - {name: a, exe: a, scoop: a, bucket: nope, run_cmd: a}\n",
+        )
+        .unwrap();
+        assert!(bucket_steps(&unknown.tools, &unknown.buckets, |_| false).is_err());
+    }
+
+    #[test]
+    fn pipx_bootstrap_is_shared() {
+        let pre = Prereqs {
+            python: false,
+            pipx: false,
+            ..all()
+        };
+        assert_eq!(
+            pipx_bootstrap(pre, "setup").unwrap(),
+            [
+                "scoop install python",
+                "scoop install pipx",
+                "pipx ensurepath"
+            ]
+        );
+        assert_eq!(pipx_bootstrap(all(), "setup").unwrap(), ["pipx ensurepath"]);
     }
 
     #[test]

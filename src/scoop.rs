@@ -44,6 +44,35 @@ fn safe(s: &str, allow_url: bool) -> bool {
         })
 }
 
+/// `scoop bucket add` line for `bucket`, or `None` if it's already added.
+pub fn plan_bucket_add(
+    bucket: &str,
+    added: bool,
+    urls: &BTreeMap<String, String>,
+) -> Result<Option<String>, String> {
+    if !safe(bucket, false) {
+        return Err(format!("refusing unsafe scoop bucket name {bucket:?}"));
+    }
+    if added {
+        return Ok(None);
+    }
+    match urls.get(bucket) {
+        Some(url) if !url.is_empty() => {
+            if !safe(url, true) {
+                return Err(format!(
+                    "refusing unsafe URL for bucket '{bucket}': {url:?}"
+                ));
+            }
+            Ok(Some(format!("scoop bucket add {bucket} {url}")))
+        }
+        _ if KNOWN_BUCKETS.contains(&bucket) => Ok(Some(format!("scoop bucket add {bucket}"))),
+        _ => Err(format!(
+            "bucket '{bucket}' isn't added and tools.yaml has no URL for it \
+             (add it under `buckets:`, or run `scoop bucket add {bucket} <url>`)"
+        )),
+    }
+}
+
 /// The command(s) that install `pkg`, in order. Pure, so it can be tested:
 /// `added` says whether `bucket` is already present, and `urls` holds the
 /// catalog's `buckets:` map.
