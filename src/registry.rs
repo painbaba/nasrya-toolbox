@@ -56,6 +56,18 @@ pub struct Recipe {
     pub args: String,
 }
 
+/// One flag or subcommand the web view's command helper suggests:
+/// `{ flag: -p, arg: <ports>, help: ports to scan }`.
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub struct Opt {
+    /// `-sV`, `--url`, or a subcommand word such as `dir`
+    pub flag: String,
+    /// what goes after it, if it takes a value: `<ports>`
+    #[serde(default)]
+    pub arg: Option<String>,
+    pub help: String,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Tool {
     pub name: String,
@@ -112,6 +124,9 @@ pub struct Tool {
     /// Named argument presets; Enter offers them before the args prompt.
     #[serde(default)]
     pub recipes: Vec<Recipe>,
+    /// Flags and subcommands for the web view's command helper.
+    #[serde(default)]
+    pub options: Vec<Opt>,
 }
 
 /// `exe <args>` must print something containing `contains` (any case, on
@@ -203,6 +218,21 @@ impl Tool {
         }
         if !self.recipes.is_empty() && self.launch == Launch::Dataset {
             p.push("datasets don't run, so they can't have recipes".into());
+        }
+        let mut flags: Vec<&str> = Vec::new();
+        for o in &self.options {
+            if o.flag.is_empty() || o.flag.chars().any(char::is_whitespace) {
+                p.push(format!("option {:?}: `flag:` must be one word", o.flag));
+            } else if flags.contains(&o.flag.as_str()) {
+                p.push(format!("option {:?} is listed twice", o.flag));
+            }
+            flags.push(o.flag.as_str());
+            if o.help.trim().is_empty() {
+                p.push(format!("option {:?} needs a `help:` line", o.flag));
+            }
+        }
+        if !self.options.is_empty() && self.launch == Launch::Dataset {
+            p.push("datasets don't run, so they can't have options".into());
         }
         for d in &self.sandbox_deps {
             let ok = !d.is_empty()
@@ -542,6 +572,38 @@ mod tests {
             "c: two recipes are called \"x\"",
         ] {
             assert!(msg.contains(needle), "{needle} missing from:\n{msg}");
+        }
+    }
+
+    #[test]
+    fn options_parse_and_validate() {
+        let c = parse(
+            "tools:
+               - {name: n, exe: n, scoop: n, run_cmd: n, options: [{flag: -p, arg: '<ports>', help: ports}, {flag: dir, help: mode}]}
+",
+        )
+        .unwrap();
+        assert_eq!(c.tools[0].options[0].arg.as_deref(), Some("<ports>"));
+        assert_eq!(c.tools[0].options[1].flag, "dir");
+        let e = parse(
+            "tools:
+               - {name: a, exe: a, scoop: a, run_cmd: a, options: [{flag: '-a b', help: x}]}
+               - {name: b, exe: b, scoop: b, run_cmd: b, options: [{flag: -x, help: x}, {flag: -x, help: y}]}
+               - {name: c, exe: c, scoop: c, run_cmd: c, options: [{flag: -y, help: ' '}]}
+",
+        )
+        .unwrap_err();
+        let msg = format!("{e:#}");
+        for needle in [
+            "a: option \"-a b\": `flag:` must be one word",
+            "b: option \"-x\" is listed twice",
+            "c: option \"-y\" needs a `help:` line",
+        ] {
+            assert!(
+                msg.contains(needle),
+                "{needle} missing from:
+{msg}"
+            );
         }
     }
 
