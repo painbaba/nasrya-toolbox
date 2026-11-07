@@ -365,3 +365,14 @@ tools:
     run_cmd: '{scoop_app}\dnSpy.exe'
     args_hint: ""
     launch: gui
+
+  - name: ghidra
+    category: reversing
+    description: NSA software reverse-engineering suite
+    exe: ghidraRun
+    scoop: ghidra
+    bucket: extras
+    run_cmd: ghidraRun
+    args_hint: ""
+    launch: gui
+    note: needs a JDK 21+ (e.g. scoop bucket add java; scoop install java/temurin25-jdk)
