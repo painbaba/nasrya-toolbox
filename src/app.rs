@@ -220,6 +220,48 @@ pub enum Confirm {
     Quit,
 }
 
+/// The overlays, in the order keys reach them (see `App::layer`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Layer {
+    Tour,
+    /// the installer's packs: yes / no is left to the keyboard
+    FirstRun,
+    Join,
+    Lan,
+    Appearance,
+    Flags,
+    Challenges,
+    Recipes,
+    Provider,
+    Agent,
+    Help,
+}
+
+/// What the renderer drew at a spot, for the mouse. `ui::render` records
+/// these in `App::hits` every frame; `App::on_mouse` looks them up.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Hit {
+    /// the tool list's box (the wheel scrolls it)
+    ToolList,
+    /// a row of the tool list: this tool (an index into `tools`)
+    Tool(usize),
+    /// a category chip (an index into `cat_tabs`)
+    Category(usize),
+    /// a terminal's tab or its pane (0 = console)
+    Term(usize),
+    /// a key hint: clicking it presses the key
+    Key(KeyCode),
+    /// the "press again" prompt in the footer: clicking it confirms
+    Confirm,
+    /// an open overlay's box
+    Popup(Layer),
+    /// entry `n` of an overlay's list
+    Row(Layer, usize),
+}
+
+/// Two clicks on the same cell this close together are a double-click.
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+
 /// State of the `t` appearance overlay.
 pub struct Appearance {
     /// highlighted row, an index into `theme::Field::ALL`
@@ -432,6 +474,10 @@ pub struct App {
     pub agent_busy: bool,
     /// Screen rect of the clickable agent icon, set by the renderer each frame.
     pub agent_icon: std::cell::Cell<Option<Rect>>,
+    /// What is drawn where (topmost last), set by the renderer each frame.
+    pub hits: std::cell::RefCell<Vec<(Rect, Hit)>>,
+    /// The last left click (when, column, row), to spot double-clicks.
+    last_click: Option<(Instant, u16, u16)>,
     /// A background detection pass is in flight.
     detecting: bool,
     /// The console is running a scoop install (so re-detect when it exits).
@@ -529,6 +575,8 @@ impl App {
             provider_pick: None,
             agent_busy: false,
             agent_icon: std::cell::Cell::new(None),
+            hits: std::cell::RefCell::new(Vec::new()),
+            last_click: None,
             detecting: false,
             installing: false,
             screen: Screen::Splash,
@@ -3206,42 +3254,252 @@ impl App {
         }
     }
 
-    // ---- agent (`a` key / header icon) --------------------------------
+    // ---------------------------------------------------------------- mouse
 
-    /// Mouse: a left click on the header agent icon runs it (or closes an open
-    /// overlay); the wheel scrolls the output pane (mouse capture otherwise
-    /// swallows it).
+    /// Mouse: clicks and the wheel, hit-tested against what the last frame
+    /// drew (`hits`). A click does what the key it stands for does, so the
+    /// mouse, the keyboard and the web view share one code path.
     fn on_mouse(&mut self, m: MouseEvent) {
+        let hit = self.hit_at(m.column, m.row);
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(r) = self.agent_icon.get() {
-                    let hit = m.column >= r.x
-                        && m.column < r.x + r.width
-                        && m.row >= r.y
-                        && m.row < r.y + r.height;
-                    if hit {
-                        if self.agent.is_some() {
-                            self.agent = None;
-                        } else {
-                            self.start_analysis();
-                        }
-                    }
-                }
+                let double = self.double_click(m.column, m.row, Instant::now());
+                self.on_click(hit, m.column, m.row, double);
             }
-            MouseEventKind::ScrollUp => {
-                if let Some(s) = self.focused_mut() {
-                    let max = s.view.get().1;
-                    s.scroll = (s.scroll + 3).min(max);
-                }
-            }
-            MouseEventKind::ScrollDown => {
-                if let Some(s) = self.focused_mut() {
-                    s.scroll = s.scroll.saturating_sub(3);
-                }
-            }
+            MouseEventKind::ScrollUp => self.on_wheel(hit, true),
+            MouseEventKind::ScrollDown => self.on_wheel(hit, false),
             _ => {}
         }
     }
+
+    /// The topmost thing drawn at (`x`, `y`).
+    fn hit_at(&self, x: u16, y: u16) -> Option<Hit> {
+        let pos = ratatui::layout::Position { x, y };
+        self.hits
+            .borrow()
+            .iter()
+            .rev()
+            .find(|(r, _)| r.contains(pos))
+            .map(|&(_, h)| h)
+    }
+
+    /// Is this click the second of a double-click?
+    fn double_click(&mut self, x: u16, y: u16, now: Instant) -> bool {
+        let double = self.last_click.is_some_and(|(t, lx, ly)| {
+            (lx, ly) == (x, y) && now.saturating_duration_since(t) <= DOUBLE_CLICK
+        });
+        // a third click starts over
+        self.last_click = if double { None } else { Some((now, x, y)) };
+        double
+    }
+
+    /// The overlay that keys go to right now, if one is open (the same
+    /// order as `on_key`).
+    fn layer(&self) -> Option<Layer> {
+        if self.tour.is_some() {
+            Some(Layer::Tour)
+        } else if self.first_run.is_some() {
+            Some(Layer::FirstRun)
+        } else if self.join_prompt.is_some() {
+            Some(Layer::Join)
+        } else if self.lan_panel.is_some() {
+            Some(Layer::Lan)
+        } else if self.appearance.is_some() {
+            Some(Layer::Appearance)
+        } else if self.flags_view.is_some() {
+            Some(Layer::Flags)
+        } else if self.challenge_view.is_some() {
+            Some(Layer::Challenges)
+        } else if self.recipe_view.is_some() {
+            Some(Layer::Recipes)
+        } else if self.provider_pick.is_some() {
+            Some(Layer::Provider)
+        } else if self.agent.is_some() {
+            Some(Layer::Agent)
+        } else if self.show_help {
+            Some(Layer::Help)
+        } else {
+            None
+        }
+    }
+
+    /// Press `code`, as if typed.
+    fn press(&mut self, code: KeyCode) {
+        self.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    fn on_click(&mut self, hit: Option<Hit>, x: u16, y: u16, double: bool) {
+        // the header agent icon runs the agent, or closes its overlay
+        let on_icon = self
+            .agent_icon
+            .get()
+            .is_some_and(|r| r.contains(ratatui::layout::Position { x, y }));
+        if on_icon && matches!(self.layer(), None | Some(Layer::Agent)) {
+            if self.agent.is_some() {
+                self.agent = None;
+            } else {
+                self.start_analysis();
+            }
+            return;
+        }
+        if let Some(layer) = self.layer() {
+            self.click_layer(layer, hit);
+            return;
+        }
+        match self.mode {
+            Mode::Browsing => {}
+            // all terminals busy: clicking one picks it
+            Mode::SlotPick => {
+                if let Some(Hit::Term(pos @ 1..=SLOTS)) = hit {
+                    self.press(KeyCode::Char((b'0' + pos as u8) as char));
+                }
+                return;
+            }
+            // a prompt is open: the keyboard has it
+            _ => return,
+        }
+        // a pending confirmation only survives until the next click, unless
+        // the click is the confirmation (or presses the key again)
+        let confirm = self.confirm.take();
+        match hit {
+            Some(Hit::Confirm) => self.confirm_now(confirm),
+            Some(Hit::Key(code)) => {
+                self.confirm = confirm;
+                self.press(code);
+            }
+            Some(Hit::Tool(i)) => {
+                self.selected = i;
+                if double {
+                    self.press(KeyCode::Enter);
+                }
+            }
+            Some(Hit::Category(i)) => {
+                self.cat = i.min(self.cat_tabs.len().saturating_sub(1));
+                self.step_category(0);
+            }
+            Some(Hit::Term(pos)) if pos != self.focus => self.set_focus(pos),
+            _ => {}
+        }
+    }
+
+    /// The "press again" prompt was clicked: do what it asked about.
+    fn confirm_now(&mut self, confirm: Option<Confirm>) {
+        match confirm {
+            Some(Confirm::Close(pos)) => self.apply(Action::Close(pos), Source::Terminal),
+            Some(Confirm::Quit) => self.quit = true,
+            None => {}
+        }
+    }
+
+    /// A click while overlay `layer` is open: on one of its entries it picks
+    /// that entry; outside its box it closes it (as Esc does).
+    fn click_layer(&mut self, layer: Layer, hit: Option<Hit>) {
+        match (layer, hit) {
+            // any click closes the key list, as any key does
+            (Layer::Help, _) => self.press(KeyCode::Esc),
+            // the welcome card: a click is "next" (Esc still skips it)
+            (Layer::Tour, _) => self.press(KeyCode::Enter),
+            // installs or drops the packs: a stray click mustn't decide
+            (Layer::FirstRun, _) => {}
+            (_, Some(Hit::Row(l, n))) if l == layer => self.click_row(layer, n),
+            (_, Some(Hit::Popup(l))) if l == layer => {}
+            _ => self.press(KeyCode::Esc),
+        }
+    }
+
+    /// Entry `n` of an overlay was clicked: the first click highlights it, a
+    /// click on the highlighted one does what Enter does.
+    fn click_row(&mut self, layer: Layer, n: usize) {
+        /// Highlight `n`; true when it already was.
+        fn pick(cur: &mut Option<usize>, n: usize) -> bool {
+            let again = *cur == Some(n);
+            *cur = Some(n);
+            again
+        }
+        let enter = match layer {
+            Layer::Recipes => pick(&mut self.recipe_view, n),
+            Layer::Flags => pick(&mut self.flags_view, n),
+            Layer::Challenges => pick(&mut self.challenge_view, n),
+            // guests have no Enter: v / f / x act on the highlighted one
+            Layer::Lan => {
+                self.lan_panel = Some(n);
+                false
+            }
+            Layer::Join => match self.join_prompt.as_mut() {
+                // the same grace as for keys: a stray click can't answer it
+                Some(p) if p.since.elapsed() >= JOIN_GRACE => {
+                    let again = p.cursor == n;
+                    p.cursor = n.min(JOIN_CHOICES.len() - 1);
+                    again
+                }
+                _ => false,
+            },
+            Layer::Provider => match self.provider_pick.as_mut() {
+                Some(p) if p.editing.is_none() => {
+                    let again = p.cursor == n;
+                    p.cursor = n.min(agent::Provider::ALL.len() - 1);
+                    again
+                }
+                _ => false,
+            },
+            Layer::Appearance => {
+                let fields = Field::ALL.len();
+                let Some(ap) = self.appearance.as_mut() else {
+                    return;
+                };
+                if n < fields {
+                    // a setting: highlight it, then each click steps it
+                    if ap.cursor == n {
+                        self.settings.step(Field::ALL[n], 1);
+                    }
+                    ap.cursor = n;
+                } else if let Some(t) = crate::theme::ThemeName::ALL.get(n - fields) {
+                    // a theme from the numbered list, as 1-8 picks it
+                    self.settings.theme = *t;
+                    ap.cursor = 0;
+                }
+                false
+            }
+            Layer::Tour | Layer::FirstRun | Layer::Agent | Layer::Help => false,
+        };
+        if enter {
+            self.press(KeyCode::Enter);
+        }
+    }
+
+    /// The wheel: over the tool list it moves the selection, over a terminal
+    /// it scrolls that one, elsewhere the shown one. In an overlay it moves
+    /// the highlight.
+    fn on_wheel(&mut self, hit: Option<Hit>, up: bool) {
+        if let Some(layer) = self.layer() {
+            // in these a key closes, skips or answers
+            if !matches!(layer, Layer::Help | Layer::Tour | Layer::FirstRun) {
+                self.press(if up { KeyCode::Up } else { KeyCode::Down });
+            }
+            return;
+        }
+        let pos = match hit {
+            Some(Hit::Tool(_) | Hit::ToolList) => {
+                // not while typing args: there ↑↓ is history, not the list
+                if matches!(self.mode, Mode::Browsing | Mode::Filter) {
+                    self.move_selection(if up { -3 } else { 3 });
+                }
+                return;
+            }
+            Some(Hit::Term(pos)) => pos,
+            _ => self.focus,
+        };
+        if let Some(s) = self.session_mut(pos) {
+            if up {
+                let max = s.view.get().1;
+                s.scroll = (s.scroll + 3).min(max);
+            } else {
+                s.scroll = s.scroll.saturating_sub(3);
+            }
+        }
+    }
+
+    // ---- agent (`a` key / header icon) --------------------------------
 
     /// Kick off an analysis of the current output with the chosen provider.
     fn start_analysis(&mut self) {
@@ -4315,5 +4573,173 @@ mod tests {
         assert!(a.first_run.is_none() && !f.exists());
         assert!(a.install_queue.is_empty() && !a.installing);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---------------------------------------------------------------- mouse
+
+    type TestScreen = ratatui::Terminal<ratatui::backend::TestBackend>;
+
+    /// Draw `a` on a `w` x `h` test screen, which records its hit rects.
+    fn paint(a: &App, w: u16, h: u16) -> TestScreen {
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+        t.draw(|f| ui::render(f, a)).unwrap();
+        t
+    }
+
+    /// The cell where `text` first starts in screen rows `rows`.
+    fn spot(t: &TestScreen, text: &str, rows: std::ops::Range<u16>) -> (u16, u16) {
+        let buf = t.backend().buffer();
+        for y in rows {
+            let cells: Vec<&str> = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+            let line = cells.concat();
+            if let Some(at) = line.find(text) {
+                // byte offset -> column
+                let mut bytes = 0;
+                for (x, c) in cells.iter().enumerate() {
+                    if bytes == at {
+                        return (x as u16, y);
+                    }
+                    bytes += c.len();
+                }
+            }
+        }
+        panic!("{text:?} isn't on screen");
+    }
+
+    fn mouse(a: &mut App, kind: MouseEventKind, (x, y): (u16, u16)) {
+        a.on_mouse(MouseEvent {
+            kind,
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    fn click(a: &mut App, at: (u16, u16)) {
+        mouse(a, MouseEventKind::Down(MouseButton::Left), at);
+    }
+
+    #[test]
+    fn mouse_selects_runs_and_scrolls() {
+        let mut a = app();
+        let nmap = a.tools.iter().position(|t| t.name == "nmap").unwrap();
+        let t = paint(&a, 140, 40);
+        let at = spot(&t, "nmap ", 3..30);
+        assert!(at.0 < 50, "in the tool list: {at:?}");
+        click(&mut a, at);
+        assert_eq!(a.selected, nmap);
+        assert!(a.recipe_view.is_none(), "one click only selects");
+        // a double-click is Enter: nmap has recipes
+        click(&mut a, at);
+        assert_eq!(a.recipe_view, Some(0));
+        a.recipe_view = None;
+        // the wheel over the list moves the selection
+        paint(&a, 140, 40);
+        mouse(&mut a, MouseEventKind::ScrollDown, at);
+        assert_ne!(a.selected, nmap);
+        // over a terminal it scrolls that terminal
+        for i in 0..200 {
+            a.console.push(format!("line {i}"));
+        }
+        paint(&a, 140, 40);
+        mouse(&mut a, MouseEventKind::ScrollUp, (100, 20));
+        assert_eq!(a.console.scroll, 3);
+        mouse(&mut a, MouseEventKind::ScrollDown, (100, 20));
+        assert_eq!(a.console.scroll, 0);
+    }
+
+    #[test]
+    fn mouse_picks_categories_and_terminals() {
+        let mut a = app();
+        let t = paint(&a, 200, 40);
+        click(&mut a, spot(&t, "Web", 1..2));
+        assert_eq!(a.cat_tabs[a.cat].label(), "Web");
+        assert!(a.visible().contains(&a.selected));
+        // terminal tabs
+        fake(&mut a, 2, "ffuf", false, 1);
+        let t = paint(&a, 200, 40);
+        click(&mut a, spot(&t, "3 ffuf", 2..3));
+        assert_eq!(a.focus, 3);
+        click(&mut a, spot(&t, "0 console", 2..3));
+        assert_eq!(a.focus, 0);
+        // a grid cell
+        fake(&mut a, 0, "nmap", false, 2);
+        a.set_focus(3);
+        a.grid = true;
+        let t = paint(&a, 200, 40);
+        click(&mut a, spot(&t, "1 nmap", 3..40));
+        assert_eq!(a.focus, 1);
+        assert!(a.grid);
+    }
+
+    #[test]
+    fn mouse_presses_footer_hints_and_closes_overlays() {
+        let mut a = app();
+        let t = paint(&a, 160, 40);
+        click(&mut a, spot(&t, "theme", 39..40));
+        assert!(a.appearance.is_some());
+        // a theme in the list is picked live
+        let before = a.settings.theme;
+        let cyan = crate::theme::ThemeName::Cyan;
+        let t = paint(&a, 160, 40);
+        click(&mut a, spot(&t, cyan.label(), 0..40));
+        assert_eq!(a.settings.theme, cyan);
+        // a click outside closes it, as Esc does (the old look comes back)
+        click(&mut a, (0, 0));
+        assert!(a.appearance.is_none());
+        assert_eq!(a.settings.theme, before);
+        // ? opens the keys, any click closes them
+        let t = paint(&a, 160, 40);
+        click(&mut a, spot(&t, "all keys", 39..40));
+        assert!(a.show_help);
+        paint(&a, 160, 40);
+        click(&mut a, (80, 20));
+        assert!(!a.show_help);
+    }
+
+    #[test]
+    fn mouse_picks_overlay_entries() {
+        let mut a = app();
+        a.selected = a.tools.iter().position(|t| t.name == "nmap").unwrap();
+        a.recipe_view = Some(0);
+        let custom = a.tools[a.selected].recipes.len();
+        let t = paint(&a, 160, 40);
+        let at = spot(&t, "custom", 0..40);
+        click(&mut a, at);
+        assert_eq!(a.recipe_view, Some(custom), "the first click highlights");
+        click(&mut a, at);
+        assert!(a.recipe_view.is_none());
+        assert_eq!(a.mode, Mode::Input, "the second one is Enter");
+        a.mode = Mode::Browsing;
+        // clicks inside the box but off an entry keep it open
+        a.flags_view = Some(0);
+        let t = paint(&a, 160, 40);
+        click(&mut a, spot(&t, "no flags yet", 0..40));
+        assert_eq!(a.flags_view, Some(0));
+        click(&mut a, (0, 0));
+        assert!(a.flags_view.is_none());
+    }
+
+    #[test]
+    fn mouse_confirms_a_destructive_close() {
+        let mut a = app();
+        fake(&mut a, 0, "nmap", true, 0);
+        a.set_focus(1);
+        // the pane's own "x close" hint is the x key: it asks first
+        let t = paint(&a, 160, 40);
+        let x = spot(&t, "x close", 30..39);
+        click(&mut a, x);
+        assert_eq!(a.confirm, Some(Confirm::Close(1)));
+        assert!(a.slots[0].is_some());
+        // any other click cancels it
+        paint(&a, 160, 40);
+        click(&mut a, (100, 20));
+        assert!(a.confirm.is_none());
+        // the footer button confirms it
+        a.press(KeyCode::Char('x'));
+        let t = paint(&a, 160, 40);
+        click(&mut a, spot(&t, "yes, close", 39..40));
+        assert!(a.slots[0].is_none());
+        assert!(a.confirm.is_none());
     }
 }

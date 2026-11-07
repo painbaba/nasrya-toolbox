@@ -3,15 +3,16 @@
 
 use std::time::Instant;
 
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::crossterm::event::KeyCode;
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::{
-    AgentView, App, Appearance, CatTab, ChallengeField, JoinPrompt, Mode, ProviderPick, ToastKind,
-    ToolStatus, JOIN_CHOICES, JOIN_GRACE, TOUR_STEPS,
+    AgentView, App, Appearance, CatTab, ChallengeField, Confirm, Hit, JoinPrompt, Layer, Mode,
+    ProviderPick, ToastKind, ToolStatus, JOIN_CHOICES, JOIN_GRACE, TOUR_STEPS,
 };
 use crate::banner;
 use crate::registry::{self, Launch, Sandbox};
@@ -20,6 +21,8 @@ use crate::theme::{Backdrop, Field, OverlayPos, Theme, ThemeName};
 use crate::web::{GuestStatus, KeyState};
 
 pub fn render(f: &mut Frame, app: &App) {
+    // this frame's clickable spots, recorded as things are drawn
+    app.hits.borrow_mut().clear();
     let mut th = app.settings.theme();
     th.mono = app.mono;
     let th = th;
@@ -68,7 +71,7 @@ pub fn render(f: &mut Frame, app: &App) {
     } else if let Some(pick) = &app.provider_pick {
         render_provider_picker(f, app, pick, &th, area);
     } else if let Some(ag) = &app.agent {
-        render_agent(f, ag, &th, area);
+        render_agent(f, app, ag, &th, area);
     } else if let Some(cur) = app.flags_view {
         render_flags(f, app, cur, &th, area);
     } else if let Some(cur) = app.challenge_view {
@@ -82,7 +85,7 @@ pub fn render(f: &mut Frame, app: &App) {
     }
     // a guest asking to join comes over the dashboard, under the tour
     if let Some(p) = &app.join_prompt {
-        render_join_prompt(f, p, &th, area);
+        render_join_prompt(f, app, p, &th, area);
     }
     if let Some(p) = &app.first_run {
         render_first_run(f, &th, area, &p.names);
@@ -224,6 +227,83 @@ pub fn help_rows() -> impl Iterator<Item = &'static (&'static str, &'static str)
         .chain(std::iter::once(&HELP_PROMPTS))
 }
 
+// ------------------------------------------------------------------- mouse
+
+/// Remember that `r` is `h`, for the mouse (`App::on_mouse`). Later calls
+/// sit on top of earlier ones.
+fn hit(app: &App, r: Rect, h: Hit) {
+    if !r.is_empty() {
+        app.hits.borrow_mut().push((r, h));
+    }
+}
+
+/// Line `line` of `inner` (the inside of a box) is `h`, if it's on screen.
+fn hit_line(app: &App, inner: Rect, line: usize, h: Hit) {
+    let y = inner.y as usize + line;
+    if y < inner.bottom() as usize {
+        let r = Rect {
+            y: y as u16,
+            height: 1,
+            ..inner
+        };
+        hit(app, r, h);
+    }
+}
+
+/// The inside of a bordered box.
+fn inside(r: Rect) -> Rect {
+    r.inner(Margin::new(1, 1))
+}
+
+/// One line of spans, some of them clickable.
+#[derive(Default)]
+struct HitLine {
+    spans: Vec<Span<'static>>,
+    /// (first column, width, what it is)
+    hits: Vec<(usize, usize, Hit)>,
+    /// columns used so far
+    x: usize,
+}
+
+impl HitLine {
+    fn push(&mut self, s: Span<'static>) {
+        self.x += s.width();
+        self.spans.push(s);
+    }
+
+    /// Everything pushed since column `from` is `h`.
+    fn hit_since(&mut self, from: usize, h: Hit) {
+        if self.x > from {
+            self.hits.push((from, self.x - from, h));
+        }
+    }
+
+    fn push_hit(&mut self, s: Span<'static>, h: Hit) {
+        let from = self.x;
+        self.push(s);
+        self.hit_since(from, h);
+    }
+
+    /// Draw it at `area`, recording the clickable parts that fit.
+    fn render(self, f: &mut Frame, app: &App, area: Rect) {
+        for &(from, w, h) in &self.hits {
+            let x = area.x as usize + from;
+            if x >= area.right() as usize {
+                continue;
+            }
+            let w = w.min(area.right() as usize - x);
+            let r = Rect {
+                x: x as u16,
+                y: area.y,
+                width: w as u16,
+                height: 1,
+            };
+            hit(app, r, h);
+        }
+        f.render_widget(Paragraph::new(Line::from(self.spans)), area);
+    }
+}
+
 // ---------------------------------------------------------------- overlays
 
 /// Where an overlay of `w` x `h` goes: centered, or docked full-width just
@@ -299,7 +379,7 @@ fn overlay_block<'a>(th: &Theme, title: &'a str, hint: &'a str) -> Block<'a> {
 
 /// "X wants to join": watch only / full control / deny. The choices stay
 /// dim for the first moment, while keys are ignored.
-fn render_join_prompt(f: &mut Frame, p: &JoinPrompt, th: &Theme, area: Rect) {
+fn render_join_prompt(f: &mut Frame, app: &App, p: &JoinPrompt, th: &Theme, area: Rect) {
     let pal = &th.pal;
     let g = &p.guest;
     let ready = p.since.elapsed() >= JOIN_GRACE;
@@ -320,6 +400,7 @@ fn render_join_prompt(f: &mut Frame, p: &JoinPrompt, th: &Theme, area: Rect) {
         )),
         Line::raw(""),
     ];
+    let first = lines.len();
     for (i, (label, desc)) in JOIN_CHOICES.iter().enumerate() {
         let on = i == p.cursor;
         let pointer = if on { th.glyph.pointer } else { "  " };
@@ -340,6 +421,10 @@ fn render_join_prompt(f: &mut Frame, p: &JoinPrompt, th: &Theme, area: Rect) {
     let w = lines.iter().map(|l| l.width()).max().unwrap_or(40) as u16 + 4;
     let h = lines.len() as u16 + 2;
     let popup = overlay_area(f, th, area, w, h);
+    hit(app, popup, Hit::Popup(Layer::Join));
+    for i in 0..JOIN_CHOICES.len() {
+        hit_line(app, inside(popup), first + i, Hit::Row(Layer::Join, i));
+    }
     f.render_widget(
         Paragraph::new(lines).block(overlay_block(
             th,
@@ -432,6 +517,7 @@ fn render_lan_panel(f: &mut Frame, app: &App, cur: usize, th: &Theme, area: Rect
         .unwrap_or(0)
         .max(4);
     let cur = cur.min(guests.len().saturating_sub(1));
+    let first = lines.len();
     for (i, g) in guests.iter().enumerate() {
         let on = i == cur;
         let pointer = if on { th.glyph.pointer } else { "  " };
@@ -462,6 +548,10 @@ fn render_lan_panel(f: &mut Frame, app: &App, cur: usize, th: &Theme, area: Rect
     let w = lines.iter().map(|l| l.width()).max().unwrap_or(40) as u16 + 4;
     let h = lines.len() as u16 + 2;
     let popup = overlay_area(f, th, area, w.max(64), h);
+    hit(app, popup, Hit::Popup(Layer::Lan));
+    for i in 0..guests.len() {
+        hit_line(app, inside(popup), first + i, Hit::Row(Layer::Lan, i));
+    }
     f.render_widget(
         Paragraph::new(lines).block(overlay_block(
             th,
@@ -638,6 +728,13 @@ fn render_provider_picker(f: &mut Frame, app: &App, pick: &ProviderPick, th: &Th
     let w = (lines.iter().map(|l| l.width()).max().unwrap_or(40) as u16 + 4).min(area.width);
     let h = (lines.len() as u16 + 2).min(area.height);
     let popup = overlay_area(f, th, area, w, h);
+    hit(app, popup, Hit::Popup(Layer::Provider));
+    // each provider takes two lines (name, model), after one blank
+    for i in 0..crate::agent::Provider::ALL.len() {
+        for line in [1 + 2 * i, 2 + 2 * i] {
+            hit_line(app, inside(popup), line, Hit::Row(Layer::Provider, i));
+        }
+    }
     let bottom = if pick.editing.is_some() {
         "Enter save · Esc cancel"
     } else {
@@ -651,7 +748,7 @@ fn render_provider_picker(f: &mut Frame, app: &App, pick: &ProviderPick, th: &Th
 
 /// The agent overlay (`a`): the AI's summary, findings, and a cursor over the
 /// suggested next steps.
-fn render_agent(f: &mut Frame, ag: &AgentView, th: &Theme, area: Rect) {
+fn render_agent(f: &mut Frame, app: &App, ag: &AgentView, th: &Theme, area: Rect) {
     let p = &th.pal;
     let a = &ag.analysis;
     let mut lines: Vec<Line> = Vec::new();
@@ -709,6 +806,7 @@ fn render_agent(f: &mut Frame, ag: &AgentView, th: &Theme, area: Rect) {
     // wrapping can grow lines, so leave headroom rather than clip tightly
     let h = (lines.len() as u16 + 6).min(area.height);
     let popup = overlay_area(f, th, area, w, h);
+    hit(app, popup, Hit::Popup(Layer::Agent));
     f.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: true })
@@ -814,6 +912,17 @@ fn render_appearance(f: &mut Frame, app: &App, ap: &Appearance, th: &Theme, area
         ])
         .split(inner);
     f.render_widget(Paragraph::new(rows), parts[0]);
+    // after one blank line: the settings, a blank line, then the themes
+    // (rows past the settings count on as themes)
+    hit(app, popup, Hit::Popup(Layer::Appearance));
+    let fields = Field::ALL.len();
+    for i in 0..fields {
+        hit_line(app, parts[0], 1 + i, Hit::Row(Layer::Appearance, i));
+    }
+    for j in 0..ThemeName::ALL.len() {
+        let row = Hit::Row(Layer::Appearance, fields + j);
+        hit_line(app, parts[0], fields + 2 + j, row);
+    }
 
     let sample = th
         .block(p.border)
@@ -1054,24 +1163,29 @@ fn render_categories(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         end += 1;
     }
 
-    let mut spans = vec![Span::styled(
-        if start > 0 {
-            format!("{} ", g.more_l)
-        } else {
-            "  ".to_string()
-        },
-        th.fg(p.dim),
-    )];
-    for (i, chip) in chips.iter().enumerate().take(end + 1).skip(start) {
+    // a click on a chip opens it; on an overflow marker, steps that way
+    let mut line = HitLine::default();
+    if start > 0 {
+        let more = Span::styled(format!("{} ", g.more_l), th.fg(p.dim));
+        line.push_hit(more, Hit::Key(KeyCode::Left));
+    } else {
+        line.push(Span::raw("  "));
+    }
+    for (i, chip) in chips.into_iter().enumerate().take(end + 1).skip(start) {
         if i > start {
-            spans.push(Span::styled(sep, th.fg(p.dim)));
+            line.push(Span::styled(sep, th.fg(p.dim)));
         }
-        spans.extend(chip.spans.iter().cloned());
+        let from = line.x;
+        for s in chip.spans {
+            line.push(s);
+        }
+        line.hit_since(from, Hit::Category(i));
     }
-    if end + 1 < chips.len() {
-        spans.push(Span::styled(format!(" {}", g.more_r), th.fg(p.dim)));
+    if end + 1 < app.cat_tabs.len() {
+        let more = Span::styled(format!(" {}", g.more_r), th.fg(p.dim));
+        line.push_hit(more, Hit::Key(KeyCode::Right));
     }
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    line.render(f, app, area);
 }
 
 /// Icon, its colour, and the short badge shown at the end of a list row.
@@ -1104,6 +1218,8 @@ fn clip(s: &str, max: usize, fancy: bool) -> String {
 }
 
 fn render_tool_list(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
+    // the wheel scrolls the list anywhere over it (rows are added on top)
+    hit(app, area, Hit::ToolList);
     let p = &th.pal;
     let g = th.glyph;
     let tab = &app.cat_tabs[app.cat];
@@ -1237,6 +1353,17 @@ fn render_tool_list(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
     let mut state = ListState::default();
     state.select(sel_pos);
     f.render_stateful_widget(list, area, &mut state);
+    // rendering scrolled the list: row k shows tool offset + k
+    let first = state.offset();
+    let rows = inside(area);
+    for (k, &i) in visible
+        .iter()
+        .skip(first)
+        .take(rows.height as usize)
+        .enumerate()
+    {
+        hit_line(app, rows, k, Hit::Tool(i));
+    }
 }
 
 /// What the highlighted tool is: its categories (main one first), whether
@@ -1330,8 +1457,11 @@ fn render_terminal_tabs(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
     let g = th.glyph;
     let spin = g.spinner;
     let frame = spin[(app.tick / 2 % spin.len() as u64) as usize];
-    let mut spans = vec![Span::raw(" ")];
+    // a click on a tab brings that terminal to the front
+    let mut line = HitLine::default();
+    line.push(Span::raw(" "));
     for pos in 0..=SLOTS {
+        let from = line.x;
         let sess = app.session(pos);
         let label = match sess {
             Some(s) => format!("{pos} {}", s.title),
@@ -1342,32 +1472,36 @@ fn render_terminal_tabs(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             if th.mono {
                 on = on.add_modifier(Modifier::UNDERLINED);
             }
-            spans.push(Span::styled(format!("{}{label}{}", g.tab_l, g.tab_r), on));
+            line.push(Span::styled(format!("{}{label}{}", g.tab_l, g.tab_r), on));
         } else {
             let style = if sess.is_some() {
                 th.fg(p.fg)
             } else {
                 th.fg(p.dim)
             };
-            spans.push(Span::styled(format!(" {label} "), style));
+            line.push(Span::styled(format!(" {label} "), style));
         }
         if let Some(s) = sess {
             match s.state {
-                RunState::Running => spans.push(Span::styled(frame, th.fg(p.warn))),
+                RunState::Running => line.push(Span::styled(frame, th.fg(p.warn))),
                 RunState::Idle => {}
-                _ if s.failed() => spans.push(Span::styled(g.failed, th.fg(p.err))),
-                _ => spans.push(Span::styled(g.done, th.fg(p.ok))),
+                _ if s.failed() => line.push(Span::styled(g.failed, th.fg(p.err))),
+                _ => line.push(Span::styled(g.done, th.fg(p.ok))),
             }
             if s.unread {
-                spans.push(Span::styled(g.unread, th.strong(p.info)));
+                line.push(Span::styled(g.unread, th.strong(p.info)));
             }
         }
-        spans.push(Span::raw(" "));
+        line.hit_since(from, Hit::Term(pos));
+        line.push(Span::raw(" "));
     }
     if !app.grid && app.slots.iter().filter(|s| s.is_some()).count() > 1 {
-        spans.push(Span::styled("g grid", th.fg(p.dim)));
+        line.push_hit(
+            Span::styled("g grid", th.fg(p.dim)),
+            Hit::Key(KeyCode::Char('g')),
+        );
     }
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    line.render(f, app, area);
 }
 
 fn render_terminals(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
@@ -1394,6 +1528,8 @@ fn render_terminals(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
 fn render_session(f: &mut Frame, app: &App, th: &Theme, area: Rect, pos: usize, grid: bool) {
     let p = &th.pal;
     let focused = pos == app.focus;
+    // a click brings it to the front (grid), the wheel scrolls it
+    hit(app, area, Hit::Term(pos));
     let Some(s) = app.session(pos) else {
         let block = th
             .block(if grid && focused { p.accent } else { p.border })
@@ -1465,17 +1601,32 @@ fn render_session(f: &mut Frame, app: &App, th: &Theme, area: Rect, pos: usize, 
     } else {
         p.border
     };
+    let bottom_w = bottom.width() as u16;
     let mut block = th.block(border).title(title).title_bottom(bottom);
+    // bottom right: key hints, each one clickable
+    let mut keys: &[(&str, char)] = &[];
     if focused && pos > 0 && !grid {
-        let hint = if s.running() {
-            " s input · c stop · x close "
+        keys = if s.running() {
+            &[(" s input ·", 's'), (" c stop ·", 'c'), (" x close ", 'x')]
         } else {
-            " x close "
+            &[(" x close ", 'x')]
         };
+        let hint: String = keys.iter().map(|k| k.0).collect();
         block = block
             .title_bottom(Line::from(Span::styled(hint, th.fg(p.dim))).alignment(Alignment::Right));
     }
     f.render_widget(Paragraph::new(text).block(block), area);
+    let hint_w: u16 = keys.iter().map(|k| k.0.chars().count() as u16).sum();
+    // only where the state on the left doesn't cover them
+    if hint_w > 0 && area.height >= 2 && area.width >= bottom_w + hint_w + 3 {
+        let mut x = area.right() - 1 - hint_w;
+        for &(text, key) in keys {
+            let w = text.chars().count() as u16;
+            let r = Rect::new(x, area.bottom() - 1, w, 1);
+            hit(app, r, Hit::Key(KeyCode::Char(key)));
+            x += w;
+        }
+    }
 }
 
 /// Bottom-left of a terminal: what its process is doing.
@@ -1715,49 +1866,69 @@ fn render_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         Mode::Browsing => {
             let key = |k: &'static str| Span::styled(k, th.fg(p.accent));
             let sep = |d: &'static str| Span::styled(d, th.fg(p.dim));
-            // plain text: only a pending "press again" gets a solid label
-            let status = if app.confirm.is_some() {
-                Span::styled(format!(" {} ", app.status_line), pill(th, p.err))
+            let mut line = HitLine::default();
+            // plain text: only a pending "press again" gets a solid label,
+            // with a button that confirms it
+            if let Some(c) = app.confirm {
+                let yes = match c {
+                    Confirm::Close(_) => " yes, close ",
+                    Confirm::Quit => " yes, quit ",
+                };
+                line.push(Span::raw(" "));
+                line.push_hit(Span::styled(yes, pill(th, p.warn)), Hit::Confirm);
+                line.push(Span::styled(
+                    format!(" {} ", app.status_line),
+                    pill(th, p.err),
+                ));
             } else {
-                Span::styled(format!(" {}", app.status_line), th.fg(p.fg))
-            };
-            let mut spans = vec![
-                status,
-                Span::raw("  "),
-                key("Enter"),
-                sep(" run · "),
-                key("i"),
-                sep(" install · "),
-                key("←→"),
-                sep(" category · "),
-                key("/"),
-                sep(" filter · "),
-                key("0-4"),
-                sep(" terminals · "),
-                key("t"),
-                sep(" theme · "),
+                line.push(Span::styled(format!(" {}", app.status_line), th.fg(p.fg)));
+            }
+            line.push(Span::raw("  "));
+            // each hint presses its key when clicked
+            let hint = |k, d, code| ([key(k), sep(d)], Hit::Key(code));
+            let hints = [
+                hint("Enter", " run · ", KeyCode::Enter),
+                hint("i", " install · ", KeyCode::Char('i')),
+                hint("←→", " category · ", KeyCode::Right),
+                hint("/", " filter · ", KeyCode::Char('/')),
+                hint("0-4", " terminals · ", KeyCode::Tab),
+                hint("t", " theme · ", KeyCode::Char('t')),
             ];
-            let tail = [
-                Span::styled("?", th.strong(p.accent)),
-                sep(" all keys · "),
-                key("q"),
-                sep(" quit"),
-            ];
+            let mut help = hint("?", " all keys · ", KeyCode::Char('?'));
+            help.0[0] = Span::styled("?", th.strong(p.accent));
+            let tail = [help, hint("q", " quit", KeyCode::Char('q'))];
             // the web hint only when it fits: "q quit" must stay visible
-            let web = [
-                key("w"),
-                sep(if app.web.is_some() {
+            let web = hint(
+                "w",
+                if app.web.is_some() {
                     " web on · "
                 } else {
                     " web · "
-                }),
-            ];
-            let width = |s: &[Span]| s.iter().map(|s| s.width()).sum::<usize>();
-            if width(&spans) + width(&web) + width(&tail) <= area.width as usize {
-                spans.extend(web);
+                },
+                KeyCode::Char('w'),
+            );
+            let width = |h: &[([Span; 2], Hit)]| {
+                h.iter()
+                    .flat_map(|(s, _)| s.iter())
+                    .map(Span::width)
+                    .sum::<usize>()
+            };
+            let fits = line.x + width(&hints) + width(std::slice::from_ref(&web)) + width(&tail)
+                <= area.width as usize;
+            let mut all: Vec<([Span; 2], Hit)> = hints.into();
+            if fits {
+                all.push(web);
             }
-            spans.extend(tail);
-            Line::from(spans)
+            all.extend(tail);
+            for (spans, h) in all {
+                let from = line.x;
+                for s in spans {
+                    line.push(s);
+                }
+                line.hit_since(from, h);
+            }
+            line.render(f, app, area);
+            return;
         }
     };
     f.render_widget(Paragraph::new(content), area);
@@ -1897,6 +2068,10 @@ fn render_recipes(f: &mut Frame, app: &App, cur: usize, th: &Theme, area: Rect) 
     let w = lines.iter().map(|l| l.width()).max().unwrap_or(40) as u16 + 4;
     let h = lines.len() as u16 + 2;
     let popup = overlay_area(f, th, area, w.max(50), h);
+    hit(app, popup, Hit::Popup(Layer::Recipes));
+    for row in 0..n {
+        hit_line(app, inside(popup), row, Hit::Row(Layer::Recipes, row));
+    }
     let title = format!("{} · recipes", t.name);
     f.render_widget(
         Paragraph::new(lines).block(overlay_block(
@@ -1954,6 +2129,7 @@ fn render_challenges(f: &mut Frame, app: &App, cur: usize, th: &Theme, area: Rec
         )));
     }
     let n = app.challenge_list.len();
+    let first = lines.len();
     for (row, w) in app.challenge_list.iter().enumerate() {
         let on = row == cur.min(n.saturating_sub(1));
         let active = app.challenge.as_ref().is_some_and(|a| a.id == w.id);
@@ -1975,6 +2151,15 @@ fn render_challenges(f: &mut Frame, app: &App, cur: usize, th: &Theme, area: Rec
     let w = lines.iter().map(|l| l.width()).max().unwrap_or(40) as u16 + 4;
     let h = lines.len().min(22) as u16 + 2;
     let popup = overlay_area(f, th, area, w.max(60), h);
+    hit(app, popup, Hit::Popup(Layer::Challenges));
+    for row in 0..n {
+        hit_line(
+            app,
+            inside(popup),
+            first + row,
+            Hit::Row(Layer::Challenges, row),
+        );
+    }
     f.render_widget(
         Paragraph::new(lines).block(overlay_block(
             th,
@@ -2025,6 +2210,10 @@ fn render_flags(f: &mut Frame, app: &App, cur: usize, th: &Theme, area: Rect) {
     let w = lines.iter().map(|l| l.width()).max().unwrap_or(40) as u16 + 4;
     let h = lines.len().min(20) as u16 + 2;
     let popup = overlay_area(f, th, area, w.max(50), h);
+    hit(app, popup, Hit::Popup(Layer::Flags));
+    for row in 0..n {
+        hit_line(app, inside(popup), row, Hit::Row(Layer::Flags, row));
+    }
     let title = format!("flags · {n}");
     f.render_widget(
         Paragraph::new(lines).block(overlay_block(

@@ -45,7 +45,9 @@ tool terminals). Ids are never reused, so late output from a replaced terminal i
 `App::focus` is a *position* (0 = console, 1..=4 = slot).
 
 **Rendering is a pure function of `App`.** `ui::render` reads state and never mutates it, except the
-`Cell` in `Session::view` that it fills so scroll math knows the pane size. Input `Mode`s, the
+`Cell` in `Session::view` that it fills so scroll math knows the pane size, and `App::hits` (plus
+`agent_icon`), where it records what it drew where. `App::on_mouse` hit-tests those rects and turns a
+click into the key it stands for (or an `Action`), so mouse, keys and web share one path. Input `Mode`s, the
 overlays (`appearance`, `show_help`, `tour`) and `confirm` (second press for destructive keys) all
 live in `App`, and `on_key` dispatches by whichever is active (tour → appearance → help → mode).
 
