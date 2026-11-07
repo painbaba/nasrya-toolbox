@@ -334,3 +334,13 @@ tools:
     run_cmd: diec
     args_hint: "binary.exe"
     note: this runs the console version (diec); the GUI is 'die', also on PATH
+
+  - name: cutter
+    category: reversing
+    description: GUI for rizin (radare2 fork)
+    exe: cutter
+    scoop: cutter
+    bucket: extras
+    run_cmd: cutter
+    args_hint: ""
+    launch: gui
