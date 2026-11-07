@@ -42,6 +42,8 @@ pub enum Mode {
     StdinInput,
     /// typing a filter for the tool list (applied live)
     Filter,
+    /// typing text to find in the output
+    Search,
 }
 
 #[derive(PartialEq, Eq)]
@@ -62,8 +64,11 @@ pub struct App {
     pub output: Vec<String>,
     /// Output rows scrolled up from the bottom (0 = follow new output).
     pub scroll: usize,
-    /// Set by the renderer: (visible rows, max useful scroll).
-    pub view: std::cell::Cell<(usize, usize)>,
+    /// Set by the renderer: (visible rows, max useful scroll, row width).
+    pub view: std::cell::Cell<(usize, usize, usize)>,
+    /// Last output search, and the output line it matched.
+    search: String,
+    pub search_hit: Option<usize>,
     pub mode: Mode,
     pub editor: LineEditor,
     history: History,
@@ -111,7 +116,9 @@ impl App {
             filter: String::new(),
             output,
             scroll: 0,
-            view: std::cell::Cell::new((10, 0)),
+            view: std::cell::Cell::new((10, 0, 80)),
+            search: String::new(),
+            search_hit: None,
             mode: Mode::Browsing,
             editor: LineEditor::default(),
             history: History::default(),
@@ -227,6 +234,7 @@ impl App {
         if self.output.len() > MAX {
             let excess = self.output.len() - MAX;
             self.output.drain(0..excess);
+            self.search_hit = self.search_hit.and_then(|h| h.checked_sub(excess));
         }
     }
 
@@ -266,7 +274,7 @@ impl App {
     fn on_key(&mut self, key: KeyEvent) {
         match self.mode {
             Mode::Browsing => self.on_key_browsing(key.code),
-            Mode::Input | Mode::HashInput | Mode::StdinInput | Mode::Filter => {
+            Mode::Input | Mode::HashInput | Mode::StdinInput | Mode::Filter | Mode::Search => {
                 self.on_key_input(key)
             }
         }
@@ -278,6 +286,8 @@ impl App {
             "\u{0}hashid".to_string()
         } else if self.mode == Mode::StdinInput {
             "\u{0}stdin".to_string()
+        } else if self.mode == Mode::Search {
+            "\u{0}search".to_string()
         } else {
             self.tools[self.selected].name.clone()
         }
@@ -288,17 +298,23 @@ impl App {
             KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+            KeyCode::Char('f') => {
+                self.editor.set(&self.search.clone());
+                self.mode = Mode::Search;
+            }
+            KeyCode::Char('n') => self.find_next(true),
+            KeyCode::Char('N') => self.find_next(false),
             KeyCode::Char('/') => {
                 self.editor.set(&self.filter.clone());
                 self.mode = Mode::Filter;
             }
             KeyCode::Char('r') => self.detect_all(true),
             KeyCode::PageUp => {
-                let (page, max) = self.view.get();
+                let (page, max, _) = self.view.get();
                 self.scroll = (self.scroll + page.saturating_sub(1).max(1)).min(max);
             }
             KeyCode::PageDown => {
-                let (page, _) = self.view.get();
+                let (page, _, _) = self.view.get();
                 self.scroll = self.scroll.saturating_sub(page.saturating_sub(1).max(1));
             }
             KeyCode::End => self.scroll = 0,
@@ -369,6 +385,11 @@ impl App {
                 self.history.push(&hkey, &text);
                 let mode = std::mem::replace(&mut self.mode, Mode::Browsing);
                 match mode {
+                    Mode::Search => {
+                        self.search = text;
+                        self.search_hit = None;
+                        self.find_next(true);
+                    }
                     Mode::HashInput => self.identify_hash(&text),
                     Mode::StdinInput => self.send_stdin(&text),
                     _ => self.launch(&text),
@@ -418,6 +439,62 @@ impl App {
                 self.set_filter(f);
             }
         }
+    }
+
+    /// Jump to the next match of the last search: `older` = further up
+    /// (n), otherwise further down (N). Case-insensitive; wraps around.
+    fn find_next(&mut self, older: bool) {
+        let needle = self.search.trim().to_lowercase();
+        if needle.is_empty() {
+            self.status_line = "nothing to find (press f)".into();
+            return;
+        }
+        let n = self.output.len();
+        if n == 0 {
+            return;
+        }
+        let start = self.search_hit.unwrap_or(n); // first search: from the bottom
+        let hit = (1..=n)
+            .map(|k| {
+                if older {
+                    (start + n - k) % n
+                } else {
+                    (start + k) % n
+                }
+            })
+            .find(|&i| self.output[i].to_lowercase().contains(&needle));
+        match hit {
+            Some(i) => {
+                self.search_hit = Some(i);
+                self.scroll_to_line(i);
+                let total = self
+                    .output
+                    .iter()
+                    .filter(|l| l.to_lowercase().contains(&needle))
+                    .count();
+                self.status_line = format!(
+                    "'{}': {total} matching line(s) · n older · N newer",
+                    self.search.trim()
+                );
+            }
+            None => {
+                self.search_hit = None;
+                self.status_line = format!("'{}' not found in the output", self.search.trim());
+            }
+        }
+    }
+
+    /// Scroll so output line `i` sits in the middle of the pane.
+    fn scroll_to_line(&mut self, i: usize) {
+        let (height, _, width) = self.view.get();
+        let width = width.max(1);
+        let rows_after: usize = self.output[i + 1..]
+            .iter()
+            .map(|l| l.chars().count().div_ceil(width).max(1))
+            .sum();
+        let rows_of_hit = self.output[i].chars().count().div_ceil(width).max(1);
+        // put the hit's first row about mid-pane
+        self.scroll = (rows_after + rows_of_hit).saturating_sub(height / 2 + 1);
     }
 
     /// Indices of the tools that match the current filter, in catalog order.
@@ -742,5 +819,58 @@ impl App {
         } else {
             self.status_line = "nothing is running".into();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app_with(lines: &[&str]) -> App {
+        let cat = crate::registry::parse(include_str!("../tools.yaml")).unwrap();
+        let mut a = App::new(cat, PathBuf::from("tools.yaml"), None);
+        a.output = lines.iter().map(|s| s.to_string()).collect();
+        a.view.set((4, 0, 80));
+        a
+    }
+
+    #[test]
+    fn find_starts_at_the_newest_match_and_wraps() {
+        let mut a = app_with(&["open 22", "x", "OPEN 80", "y", "open 443", "z"]);
+        a.search = "open".into();
+        a.find_next(true);
+        assert_eq!(a.search_hit, Some(4)); // newest first
+        a.find_next(true);
+        assert_eq!(a.search_hit, Some(2)); // n = older, case-insensitive
+        a.find_next(true);
+        assert_eq!(a.search_hit, Some(0));
+        a.find_next(true);
+        assert_eq!(a.search_hit, Some(4)); // wraps to the newest
+        a.find_next(false);
+        assert_eq!(a.search_hit, Some(0)); // N = newer, wraps the other way
+    }
+
+    #[test]
+    fn find_reports_no_match() {
+        let mut a = app_with(&["a", "b"]);
+        a.search = "zzz".into();
+        a.find_next(true);
+        assert_eq!(a.search_hit, None);
+        assert!(a.status_line.contains("not found"));
+    }
+
+    #[test]
+    fn hit_is_scrolled_into_the_middle() {
+        let lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let mut a = app_with(&refs);
+        a.scroll_to_line(10);
+        // 9 rows after line 10, plus its own row, minus half a 4-row page
+        assert_eq!(a.scroll, 10 - 3);
+        let (rows, _) = crate::ui::visible_rows(&a.output, 80, 4, a.scroll);
+        assert!(rows.iter().any(|(i, _)| *i == 10));
+        // the newest line needs no scrolling
+        a.scroll_to_line(19);
+        assert_eq!(a.scroll, 0);
     }
 }

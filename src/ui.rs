@@ -168,7 +168,7 @@ fn render_output(f: &mut Frame, app: &App, area: Rect) {
     let inner_height = area.height.saturating_sub(2) as usize;
     let inner_width = area.width.saturating_sub(2) as usize;
     let (rows, max_scroll) = visible_rows(&app.output, inner_width, inner_height, app.scroll);
-    app.view.set((inner_height, max_scroll));
+    app.view.set((inner_height, max_scroll, inner_width));
     let text: Vec<Line> = if app.output.is_empty() {
         vec![
             Line::from(Span::styled(
@@ -183,7 +183,12 @@ fn render_output(f: &mut Frame, app: &App, area: Rect) {
     } else {
         rows.into_iter()
             .map(|(i, chunk)| {
-                let style = line_style(&app.output[i]);
+                let mut style = line_style(&app.output[i]);
+                if app.search_hit == Some(i) {
+                    style = style
+                        .bg(Color::Rgb(70, 60, 10))
+                        .add_modifier(Modifier::BOLD);
+                }
                 Line::from(Span::styled(chunk, style))
             })
             .collect()
@@ -284,13 +289,17 @@ fn line_style(l: &str) -> Style {
 
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     let content = match app.mode {
-        Mode::Input | Mode::HashInput | Mode::StdinInput | Mode::Filter => {
+        Mode::Input | Mode::HashInput | Mode::StdinInput | Mode::Filter | Mode::Search => {
             let (label, help) = match app.mode {
                 Mode::HashInput => (" hash ▸ ", "  Enter identify · Esc cancel"),
                 Mode::StdinInput => (" stdin ▸ ", "  Enter send · Ctrl+D end input · Esc close"),
                 Mode::Filter => (
                     " filter ▸ ",
                     "  name / category / text · Enter keep · Esc clear",
+                ),
+                Mode::Search => (
+                    " find ▸ ",
+                    "  Enter find in output · then n / N · Esc cancel",
                 ),
                 _ => (" args ▸ ", "  Enter run · ↑↓ history · Esc cancel"),
             };
@@ -336,6 +345,8 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(" move · ", Style::default().fg(DIM)),
             Span::styled("/", Style::default().fg(CYAN)),
             Span::styled(" filter · ", Style::default().fg(DIM)),
+            Span::styled("f", Style::default().fg(CYAN)),
+            Span::styled(" find · ", Style::default().fg(DIM)),
             Span::styled("Enter", Style::default().fg(CYAN)),
             Span::styled(" run · ", Style::default().fg(DIM)),
             Span::styled("i", Style::default().fg(CYAN)),

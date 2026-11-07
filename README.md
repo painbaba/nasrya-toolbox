@@ -125,6 +125,7 @@ pass `--catalog .\tools.yaml` to use it on purpose. The active path is shown in 
 | `i` | install the selected tool (Scoop or pipx) |
 | `r` | re-detect what's installed |
 | `PgUp / PgDn` | scroll the output (`Home` = top, `End` = follow live output) |
+| `f` | find text in the output (`n` = older match, `N` = newer; the match is highlighted) |
 | `c` | cancel the running process |
 | `h` | identify a hash (built in, works offline) |
 | `q` | quit |
@@ -248,7 +249,8 @@ Config-driven tool registry → detector/installer → process runner (streams l
 - [ ] Scope enforcement before every launch (block/override-with-reason)
 - [x] Richer tool catalog across all categories: 45 entries (recon / web / passwords / crypto / forensics / stego / reversing / pwn / osint / wordlists)
 - [x] Scrollback (PgUp/PgDn) and per-run log files
-- [ ] Output search, artifacts
+- [x] Output search
+- [ ] Artifacts (collect files a tool writes, e.g. -oX / -o outputs, next to the run log)
 - [ ] One-shot report generation (Markdown/HTML)
 - [x] Scoop bucket auto-add for security tools
 - [x] pipx (Python) installs, GUI / web-app / dataset launch modes, nasrya's own Scoop bucket
