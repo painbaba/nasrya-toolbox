@@ -197,3 +197,12 @@ tools:
     scoop: apktool
     run_cmd: apktool
     args_hint: "--version"
+
+  - name: arjun
+    category: web
+    description: HTTP parameter discovery
+    exe: arjun
+    install: pipx
+    pipx: arjun
+    run_cmd: arjun
+    args_hint: "-u https://example.com/endpoint"
